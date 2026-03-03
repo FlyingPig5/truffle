@@ -14,7 +14,7 @@ The compiled APK can be downloaded from the [GitHub Releases](https://github.com
 
 ## Overview
 
-PiggyTrade is a high-performance mobile trading client for the Ergo blockchain. It is designed for traders who prioritize **speed and efficiency** over a vast feature set. By focusing on the most liquid pairs and providing a streamlined interface, PiggyTrade allows you to execute swaps in seconds.
+PiggyTrade is a high-performance mobile trading client for the Ergo blockchain. It is designed for traders who prioritize **speed and efficiency** over a vast feature set. By focusing on the most liquid pairs and providing a streamlined interface, PiggyTrade allows you to execute swaps in seconds directly on chaing (no proxy contracts). Support for Spectrum/Ergodex contracts and USE and Dexy protocols (LP Pools only). Sign with ErgoPay (recommended) or with your mnemonic directly in the app.
 
 > [!WARNING]
 > **BETA SOFTWARE**: PiggyTrade is currently in beta. Users are expected to verify all transaction details and output amounts before confirming. Use at your own risk!!!
@@ -29,7 +29,7 @@ PiggyTrade offers two ways to interact with your funds:
 *   **Mnemonic (Hot Wallet):** For maximum speed, you can import your 12/15/18-word mnemonic. It is encrypted locally with a password of your choice. This allows you to sign transactions directly within PiggyTrade.
 
 ### 2. Favorites Grid
-The main screen features a "Favorites" grid for one-tap asset selection.
+The main screen features a "Favorites" grid for two-tap asset selection.
 *   **Toggle Edit:** Turn on the "Edit" switch to change which assets appear in your grid.
 *   **Quick Swap:** Tap a favorite to immediately set it as the "To" asset.
 
@@ -41,13 +41,13 @@ PiggyTrade includes a **Debug Mode** (toggleable in Settings) which reveals:
 
 ### 4. Node Configuration
 The app comes prepopulated with several public Ergo nodes. However, for maximum reliability and speed, you can add your own custom node URL in the **Settings** menu.
----
+
 
 ### 5. Fees
 The app uses a fee of 0.0001 ERG for each trade under 10 ERG. 
 For trades over 10 ERG, the fee is 0.05% up to max 1 ERG (yeah, it's CHEAP!!)
 Token to Token trades are free!
----
+
 
 ## Philosophy: Speed vs. Features
 

@@ -1933,7 +1933,7 @@ class PiggyTrade(toga.App):
 
         self.set_loading(True)
         try:
-            url = "https://raw.githubusercontent.com/FlyingPig69/piggytrade/refs/heads/main/tokens_all.json"
+            url = "https://raw.githubusercontent.com/FlyingPig5/piggytrade/refs/heads/main/tokens_all.json"
             new_tokens, error_msg = await self.token_manager.fetch_remote(url)
             
             if error_msg:

@@ -32,4 +32,4 @@ DEXYGOLD_CONFIG = {
 }
 
 # --- Token Updates ---
-TOKENS_URL = "https://raw.githubusercontent.com/FlyingPig69/piggytrade/refs/heads/main/token_list.json"
+TOKENS_URL = "https://raw.githubusercontent.com/FlyingPig5/piggytrade/refs/heads/main/token_list.json"
