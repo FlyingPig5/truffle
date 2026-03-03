@@ -1,0 +1,59 @@
+[project]
+name = "piggytrade"
+version = "0.1.0"
+description = "Ergo Trading App"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = [
+    "toga",
+    "requests",
+    "cryptography",
+]
+
+[tool.briefcase]
+project_name = "PiggyTrade"
+bundle = "com.piggytrade"
+version = "0.1.0"
+
+[tool.briefcase.app.piggytrade]
+formal_name = "PiggyTrade"
+description = "Ergo Trading App"
+sources = ["src/piggytrade"]
+resources = ["src/piggytrade/resources"]
+requires = [
+    "toga",
+    "requests",
+    "cryptography",
+]
+icon = "resources/icon"
+
+[tool.briefcase.app.piggytrade.android]
+icon = "resources/icon"
+splash_image = "resources/splash"
+splash_background_color = "#0D1117"
+android_theme = "@style/Theme.AppCompat.NoActionBar.Dark"
+min_os_version = "26"
+requires = [
+    "toga",
+    "toga-android",
+    "requests",
+    "cryptography",
+]
+permissions = ["INTERNET"]
+extra_manifest_application_attributes = { "android:usesCleartextTraffic" = "true" }
+build_gradle_dependencies = [
+    "androidx.appcompat:appcompat:1.6.1",
+    "androidx.multidex:multidex:2.0.1",
+]
+build_gradle_extra_content = """
+configurations {
+    all*.exclude group: 'com.google.guava', module: 'listenablefuture'
+}
+dependencies {
+    implementation fileTree(dir: 'src/main/python/piggytrade/resources', include: ['*.jar'])
+}
+"""
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
