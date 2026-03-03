@@ -2,7 +2,7 @@
   <img src="branding.png" width="600">
 </p>
 
-Crypto trading application on the Ergo blockchain for Android, built using the best programming language ever—**Python**!
+Open Source crypto trading application on the Ergo blockchain for Android, built using the best programming language ever—**Python**!
 
 ## Development
 
