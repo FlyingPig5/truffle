@@ -637,7 +637,9 @@ class PiggyTrade(toga.App):
             val = self.current_balances.get('ERG', 0)
             fee_val = self.sld_fee.value if hasattr(self, 'sld_fee') else 0.001
             max_val = max(0, val - fee_val)
-            self.inp_amount.value = f"{max_val:.4f}" if max_val > 0 else "0"
+            out_str = f"{max_val:.9f}".rstrip('0').rstrip('.')
+            if out_str.endswith('.'): out_str = out_str[:-1]
+            self.inp_amount.value = out_str if max_val > 0 else "0"
         else:
             # Find token ID and decimals
             tid = None; decimals = 0
@@ -759,8 +761,9 @@ class PiggyTrade(toga.App):
             if n_up == "SIGUSD": return 1
             if n_up == "SIGRSV": return 2
             if n_up == "USE": return 3
-            if balance_cache.get(name, 0) > 0: return 4
-            return 5
+            if n_up == "DEXYGOLD": return 4
+            if balance_cache.get(name, 0) > 0: return 5
+            return 6
 
         candidates.sort(key=lambda x: (get_priority(x), x.lower()))
 
@@ -790,14 +793,17 @@ class PiggyTrade(toga.App):
                 raw_bal = balance_cache.get(t, 0)
                 if raw_bal > 0:
                     if t.upper() == "ERG":
-                        display_bal = f"{raw_bal:.4f}"
+                        bal_val = self.current_balances.get("ERG", 0)
+                        out_str = f"{bal_val:,.9f}".rstrip('0').rstrip('.')
+                        if out_str.endswith('.'): out_str = out_str[:-1]
+                        display_bal = out_str if bal_val > 0 else "0"
                     else:
                         tid = self.token_manager.tokens.get(t, {}).get("id")
                         info = self.token_cache.get(tid)
                         decimals = info.get("decimals", 0) if info else 0
                         fmt_amt = raw_bal / (10 ** decimals)
                         if decimals > 0:
-                            display_bal = f"{fmt_amt:,.{min(decimals, 4)}f}".rstrip('0').rstrip('.')
+                            display_bal = f"{fmt_amt:,.{decimals}f}".rstrip('0').rstrip('.')
                             if display_bal.endswith('.'): display_bal = display_bal[:-1]
                         else:
                             display_bal = f"{raw_bal:,}"
@@ -952,7 +958,10 @@ class PiggyTrade(toga.App):
         def get_bal_str(asset):
             if not asset or asset == "Select token": return ""
             if asset.upper() == "ERG":
-                return f"Bal: {self.current_balances.get('ERG', 0):.4f}"
+                bal_val = self.current_balances.get('ERG', 0)
+                out_str = f"{bal_val:,.9f}".rstrip('0').rstrip('.')
+                if out_str.endswith('.'): out_str = out_str[:-1]
+                return f"Bal: {out_str if bal_val > 0 else '0'}"
             
             # Find token ID and decimals
             tid = None
@@ -1276,15 +1285,20 @@ class PiggyTrade(toga.App):
                     cost_erg = fee + service_fee
                     if pay_t == "ERG":
                         total_pay = p_val + cost_erg
-                        self.lbl_rev_pay.text = f"{total_pay:,.4f} ERG"
+                        out_str = f"{total_pay:,.9f}".rstrip('0').rstrip('.')
+                        if out_str.endswith('.'): out_str = out_str[:-1]
+                        self.lbl_rev_pay.text = f"{out_str} ERG"
                     else:
-
-                        self.lbl_rev_pay.text = f"{pay_a} {pay_t} + {cost_erg:,.4f} ERG"
+                        out_cost = f"{cost_erg:,.9f}".rstrip('0').rstrip('.')
+                        if out_cost.endswith('.'): out_cost = out_cost[:-1]
+                        self.lbl_rev_pay.text = f"{pay_a} {pay_t} + {out_cost} ERG"
                 except:
                     self.lbl_rev_pay.text = f"{pay_a} {pay_t}"
                 
             if hasattr(self, 'lbl_rev_fees'):
-                self.lbl_rev_fees.text = f"Miner Fee: {fee:.3f} + Service: {service_fee:.4f} ERG"
+                out_service = f"{service_fee:.9f}".rstrip('0').rstrip('.')
+                if out_service.endswith('.'): out_service = out_service[:-1]
+                self.lbl_rev_fees.text = f"Miner Fee: {fee:.3f} + Service: {out_service} ERG"
             
             self.lbl_tx_json.value = json.dumps(tx_dict, indent=2)
             
@@ -1382,7 +1396,9 @@ class PiggyTrade(toga.App):
                 label = "User Wallet" if addr == self.current_address else "Contract / Pool"
                 lines.append(f"  {label} #{i+1}:")
                 lines.append(f"    From: {short_addr}")
-                lines.append(f"    Value: {val_erg:,.4f} ERG")
+                out_val = f"{val_erg:,.9f}".rstrip('0').rstrip('.')
+                if out_val.endswith('.'): out_val = out_val[:-1]
+                lines.append(f"    Value: {out_val} ERG")
                 
                 assets = box.get("assets", [])
                 if assets:
@@ -1412,7 +1428,9 @@ class PiggyTrade(toga.App):
             
             lines.append(f"  {label} #{i+1}:")
             lines.append(f"    Addr: {short_addr}")
-            lines.append(f"    Value: {val_erg:,.4f} ERG")
+            out_val = f"{val_erg:,.9f}".rstrip('0').rstrip('.')
+            if out_val.endswith('.'): out_val = out_val[:-1]
+            lines.append(f"    Value: {out_val} ERG")
             
             assets = req.get("assets", [])
             if assets:
@@ -1706,9 +1724,11 @@ class PiggyTrade(toga.App):
 
         # Update Summary Card if it exists
         if hasattr(self, 'lbl_wv_addr'):
-            self.lbl_wv_addr.text = f"Address: {addr[:12]}...{addr[-12:]}"
+            self.lbl_wv_addr.text = f"{addr[:12]}...{addr[-12:]}"
         if hasattr(self, 'lbl_wv_erg'):
-            self.lbl_wv_erg.text = f"{total_erg:.4f} ERG"
+            out_erg = f"{total_erg:,.9f}".rstrip('0').rstrip('.')
+            if out_erg.endswith('.'): out_erg = out_erg[:-1]
+            self.lbl_wv_erg.text = f"{out_erg} ERG"
 
         if self._wallet_view_tab == "tokens":
             # --- TOKENS VIEW ---

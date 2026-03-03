@@ -50,14 +50,18 @@ class Trader:
                 erg_amm = int(Decimal(nerg_to_send) * fee_mult)
                 delta, _, _ = amm.buy_token(erg_amm, pool_nanoerg, pool_token_bal)
                 readable_out = int(delta) / (10 ** cfg['dec'])
-                return f"{readable_out:,.4f}"
+                out_str = f"{readable_out:,.{cfg['dec']}f}".rstrip('0').rstrip('.')
+                if out_str.endswith('.'): out_str = out_str[:-1]
+                return out_str if out_str != "" else "0"
             elif order_type == "sell":
                 token_amt = int(amount_dec * (Decimal("10") ** cfg['dec']))
                 erg_out, _, _, _ = amm.sell_token(token_amt, pool_nanoerg, pool_token_bal)
                 fee_mult = Decimal("1") - Decimal(str(cfg['fee']))
                 erg_received = int(Decimal(str(erg_out)) * fee_mult)
                 readable_out = erg_received / 1e9
-                return f"{readable_out:,.4f}"
+                out_str = f"{readable_out:,.9f}".rstrip('0').rstrip('.')
+                if out_str.endswith('.'): out_str = out_str[:-1]
+                return out_str if out_str != "" else "0"
         elif pool_type == "token":
             tid_x = cfg.get('id_in')
             tid_y = cfg.get('id_out')
@@ -69,12 +73,16 @@ class Trader:
                 amt_in_x = int(amount_dec * (Decimal("10") ** dec_x))
                 delta_y = int(amm.token_for_token(amt_in_x, pool_bal_x, pool_bal_y, cfg['fee']))
                 readable_out = delta_y / (10 ** dec_y)
-                return f"{readable_out:,.4f}"
+                out_str = f"{readable_out:,.{dec_y}f}".rstrip('0').rstrip('.')
+                if out_str.endswith('.'): out_str = out_str[:-1]
+                return out_str if out_str != "" else "0"
             elif order_type == "buy":
                 amt_in_y = int(amount_dec * (Decimal("10") ** dec_y))
                 delta_x = int(amm.token_for_token(amt_in_y, pool_bal_y, pool_bal_x, cfg['fee']))
                 readable_out = delta_x / (10 ** dec_x)
-                return f"{readable_out:,.4f}"
+                out_str = f"{readable_out:,.{dec_x}f}".rstrip('0').rstrip('.')
+                if out_str.endswith('.'): out_str = out_str[:-1]
+                return out_str if out_str != "" else "0"
         return "Error: Unknown Pool Type"
 
     def build_swap_transaction(self, token_name, amount, order_type, pool_type="erg", sender_address=None, fee=0.002, use_mempool=True, use_lp_mempool=True, mnemonic="", mnemonic_password="", pre_1627=True):
@@ -96,13 +104,14 @@ class Trader:
         pool_box, from_mempool = self.client.get_pool_box(token_pid, lp_id, check_mempool=use_lp_mempool)
         if not pool_box:
             raise ValueError(f"Pool box for {token_name} not found.")
-        bank_box = None
+        lp_swap_box = None
         extra_requests = []
-        if token_name.lower() == "use":
-            bank_nft_id = USE_CONFIG['lp_nft']
-            bank_box, _ = self.client.get_pool_box(bank_nft_id, bank_nft_id, check_mempool=use_lp_mempool)
-            if not bank_box:
-                raise ValueError("USE Bank Box not found!")
+        if token_name.lower() in ["use", "dexygold"]:
+            cfg_lp = USE_CONFIG if token_name.lower() == "use" else DEXYGOLD_CONFIG
+            lp_nft_id = cfg_lp['lp_nft']
+            lp_swap_box, _ = self.client.get_pool_box(lp_nft_id, lp_nft_id, check_mempool=use_lp_mempool)
+            if not lp_swap_box:
+                raise ValueError(f"{token_name.upper()} LP Swap Box not found!")
         def get_bal(box, tid):
             return int(next((a['amount'] for a in box['assets'] if a['tokenId'] == tid), 0))
         pool_nanoerg = int(pool_box['value'])
@@ -112,16 +121,17 @@ class Trader:
         pool_addr = SPECTRUM_ADDRESS
         if pool_type == "erg":
             pool_token_bal = get_bal(pool_box, token_id)
-            if token_name.lower() == "use":
-                pool_addr = USE_CONFIG['pool_address']
-                extra_requests.append({"address": USE_CONFIG['bank_address'], "value": 1000000000, "assets": [{"tokenId": USE_CONFIG['lp_nft'], "amount": 1}], "registers": {}})
-            elif token_name.lower() == "dexygold":
-                pool_addr = DEXYGOLD_CONFIG['pool_address']
+            if token_name.lower() in ["use", "dexygold"]:
+                cfg_lp = USE_CONFIG if token_name.lower() == "use" else DEXYGOLD_CONFIG
+                pool_addr = cfg_lp['pool_address']
+                extra_requests.append({"address": cfg_lp['lp_swap_address'], "value": 1000000000, "assets": [{"tokenId": cfg_lp['lp_nft'], "amount": 1}], "registers": {}})
             if order_type.lower() == "buy":
                 nerg_to_send = int(amount_dec * Decimal("1000000000"))
                 req_erg = nerg_to_send + fee_nano
                 if my_nanoerg < req_erg:
-                    raise ValueError(f"Insufficient ERG. Have {my_nanoerg / 1e9:.4f}, Need {req_erg / 1e9:.4f}")
+                    err_have = f"{my_nanoerg / 1e9:,.9f}".rstrip('0').rstrip('.')
+                    err_need = f"{req_erg / 1e9:,.9f}".rstrip('0').rstrip('.')
+                    raise ValueError(f"Insufficient ERG. Have {err_have}, Need {err_need}")
                 fee_mult = Decimal("1") - Decimal(str(cfg['fee']))
                 erg_amm = int(Decimal(nerg_to_send) * fee_mult)
                 delta, _, _ = amm.buy_token(erg_amm, pool_nanoerg, pool_token_bal)
@@ -130,7 +140,8 @@ class Trader:
             elif order_type.lower() == "sell":
                 token_amt = int(amount_dec * (Decimal("10") ** cfg['dec']))
                 if my_assets.get(token_id, 0) < token_amt:
-                    raise ValueError(f"Insufficient Tokens. Have {my_assets.get(token_id, 0) / (10**cfg['dec']):.4f}, Need {amount}")
+                    err_have = f"{my_assets.get(token_id, 0) / (10**cfg['dec']):,.{cfg['dec']}f}".rstrip('0').rstrip('.')
+                    raise ValueError(f"Insufficient Tokens. Have {err_have}, Need {amount}")
                 erg_out, _, _, _ = amm.sell_token(token_amt, pool_nanoerg, pool_token_bal)
                 fee_mult = Decimal("1") - Decimal(str(cfg['fee']))
                 erg_received = int(Decimal(str(erg_out)) * fee_mult)
@@ -154,8 +165,8 @@ class Trader:
                 delta_x = int(amm.token_for_token(amt_in_y, pool_bal_y, pool_bal_x, cfg['fee']))
                 tokens_to_pool_list = [{"tokenId": tid_y, "amount": amt_in_y}, {"tokenId": tid_x, "amount": -delta_x}]
         input_ids = [pool_box['boxId']]
-        if bank_box:
-            input_ids.append(bank_box['boxId'])
+        if lp_swap_box:
+            input_ids.append(lp_swap_box['boxId'])
         input_ids.extend([b['boxId'] for b in user_boxes])
         inputs_raw = self.client.get_box_bytes(input_ids)
 
@@ -168,8 +179,8 @@ class Trader:
         tx_dict["inputIds"] = input_ids
         
         input_boxes = [pool_box]
-        if bank_box:
-            input_boxes.append(bank_box)
+        if lp_swap_box:
+            input_boxes.append(lp_swap_box)
         input_boxes.extend(user_boxes)
         tx_dict["input_boxes"] = input_boxes
         
