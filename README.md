@@ -1,11 +1,15 @@
 # PiggyTrade
 
-Crypto trading application on the Ergo blockchain, built using the best programming language ever—**Python**!
+<p align="center">
+  <img src="branding.png" width="600">
+</p>
+
+Crypto trading application on the Ergo blockchain for Android, built using the best programming language ever—**Python**!
 
 ## Development
 
 ### Build
-The compiled APK can be downloaded from the [GitHub Releases](https://github.com/FlyingPig69/piggytrade/releases), but for total security, we recommend you compile your own using the provided script:
+The compiled APK can be downloaded from the [GitHub Releases](https://github.com/FlyingPig5/piggytrade/releases), but for total security, we recommend you compile your own using the provided script:
 ```bash
 ./build_android.sh
 ```
@@ -61,4 +65,3 @@ PiggyTrade is built for **Speed**. To achieve this, we make the following trade-
 - `src/piggytrade`: Core Python source code.
 - `resources/`: High-res icons, splash screens, and generated Android variants.
 - `src/piggytrade/resources/`: Runtime assets (fonts, token logos, runtime icon).
-- `build/`: Briefcase build artifacts (gitignored).
