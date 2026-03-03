@@ -18,6 +18,8 @@ PiggyTrade is a high-performance mobile trading client for the Ergo blockchain. 
 
 > [!WARNING]
 > **BETA SOFTWARE**: PiggyTrade is currently in beta. Users are expected to verify all transaction details and output amounts before confirming. Use at your own risk!!!
+>
+> As an **Open Source** project, I invite the community to audit the code for vulnerabilities. Transparency is key to building a secure tool for everyone.
 
 ---
 
