@@ -14,7 +14,7 @@ The compiled APK can be downloaded from the [GitHub Releases](https://github.com
 
 ## Overview
 
-PiggyTrade is a high-performance mobile trading client for the Ergo blockchain. It is designed for traders who prioritize **speed and efficiency** over a vast feature set. By focusing on the most liquid pairs and providing a streamlined interface, PiggyTrade allows you to execute swaps in seconds directly on chain (no proxy contracts). Support for Spectrum/Ergodex contracts and USE and Dexy protocols (LP Pools only). Sign with ErgoPay (recommended) or with your mnemonic directly in the app.
+PiggyTrade is a high-performance mobile trading client for the Ergo blockchain. It is designed for traders who prioritize **speed and efficiency** over a vast feature set. By focusing on the most liquid pairs and providing a streamlined interface, PiggyTrade allows you to execute swaps in seconds directly on chain (no proxy contracts). Support for Spectrum/Ergodex contracts and USE and DexyGold protocols (LP Pools only). Sign with ErgoPay (recommended) or with your mnemonic directly in the app.
 
 > [!WARNING]
 > **BETA SOFTWARE**: PiggyTrade is currently in beta. Users are expected to verify all transaction details and output amounts before confirming. Use at your own risk!!!
