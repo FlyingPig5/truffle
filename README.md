@@ -1,5 +1,3 @@
-# PiggyTrade
-
 <p align="center">
   <img src="branding.png" width="600">
 </p>
@@ -27,7 +25,7 @@ PiggyTrade is a high-performance mobile trading client for the Ergo blockchain. 
 
 ### 1. Setting Up Your Wallet
 PiggyTrade offers two ways to interact with your funds:
-*   **ErgoPay (Recommended):** Best for security. You only provide your public address. When you initiate a trade, the app generates a request that you sign using your preferred wallet (like Mobile Wallet or Terminus) via a deep link. This means **your mnemonic never enters this app.**
+*   **ErgoPay (Recommended):** Best for security. You only provide your public address. When you initiate a trade, the app generates a request that you sign using your preferred wallet (for example the official [Ergo Mobile Wallet](https://github.com/ergoplatform/ergo-wallet-app)) via a deep link. This means **your mnemonic never enters this app.**
 *   **Mnemonic (Hot Wallet):** For maximum speed, you can import your 12/15/18-word mnemonic. It is encrypted locally with a password of your choice. This allows you to sign transactions directly within PiggyTrade.
 
 ### 2. Favorites Grid
