@@ -7,7 +7,7 @@ requires-python = ">=3.9"
 dependencies = [
     "toga==0.5.3",
     "requests==2.32.5",
-    "cryptography==46.0.5",
+    "cryptography==42.0.8",
 ]
 
 [tool.briefcase]
@@ -23,7 +23,7 @@ resources = ["src/piggytrade/resources"]
 requires = [
     "toga==0.5.3",
     "requests==2.32.5",
-    "cryptography==46.0.5",
+    "cryptography==42.0.8",
 ]
 icon = "resources/icon"
 
@@ -37,7 +37,7 @@ requires = [
     "toga==0.5.3",
     "toga-android==0.5.3",
     "requests==2.32.5",
-    "cryptography==46.0.5",
+    "cryptography==42.0.8",
 ]
 permissions = ["INTERNET", "USE_BIOMETRIC"]
 extra_manifest_application_attributes = { "android:usesCleartextTraffic" = "true" }

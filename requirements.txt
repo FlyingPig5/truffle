@@ -1,4 +1,4 @@
 toga==0.5.3
 briefcase==0.3.26
 requests==2.32.5
-cryptography==46.0.5
+cryptography==42.0.8
