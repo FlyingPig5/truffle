@@ -497,6 +497,14 @@ class ErgoSigner:
             import traceback
             traceback.print_exc()
             return None, str(e)
+        finally:
+            # Best effort memory wiping
+            if 'mnemonic' in locals(): del mnemonic
+            if 'mnemonic_password' in locals(): del mnemonic_password
+            if 'wM' in locals(): del wM
+            if 'wP' in locals(): del wP
+            import gc
+            gc.collect()
 
     def reduce_tx_for_ergopay(
         self,

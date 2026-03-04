@@ -50,18 +50,30 @@ class Trader:
                 erg_amm = int(Decimal(nerg_to_send) * fee_mult)
                 delta, _, _ = amm.buy_token(erg_amm, pool_nanoerg, pool_token_bal)
                 readable_out = int(delta) / (10 ** cfg['dec'])
+                
+                # Price Impact: (ExecPrice - SpotPrice) / SpotPrice
+                spot_price = Decimal(pool_nanoerg) / Decimal(pool_token_bal)
+                execution_price = Decimal(nerg_to_send) / Decimal(delta)
+                price_impact = ((execution_price - spot_price) / spot_price) * 100
+                
                 out_str = f"{readable_out:,.{cfg['dec']}f}".rstrip('0').rstrip('.')
                 if out_str.endswith('.'): out_str = out_str[:-1]
-                return out_str if out_str != "" else "0"
+                return out_str, price_impact
             elif order_type == "sell":
                 token_amt = int(amount_dec * (Decimal("10") ** cfg['dec']))
                 erg_out, _, _, _ = amm.sell_token(token_amt, pool_nanoerg, pool_token_bal)
                 fee_mult = Decimal("1") - Decimal(str(cfg['fee']))
                 erg_received = int(Decimal(str(erg_out)) * fee_mult)
                 readable_out = erg_received / 1e9
+                
+                # Price Impact: (ExecPrice - SpotPrice) / SpotPrice
+                spot_price = Decimal(pool_token_bal) / Decimal(pool_nanoerg)
+                execution_price = Decimal(token_amt) / Decimal(erg_out)
+                price_impact = ((execution_price - spot_price) / spot_price) * 100
+                
                 out_str = f"{readable_out:,.9f}".rstrip('0').rstrip('.')
                 if out_str.endswith('.'): out_str = out_str[:-1]
-                return out_str if out_str != "" else "0"
+                return out_str, price_impact
         elif pool_type == "token":
             tid_x = cfg.get('id_in')
             tid_y = cfg.get('id_out')
@@ -73,17 +85,31 @@ class Trader:
                 amt_in_x = int(amount_dec * (Decimal("10") ** dec_x))
                 delta_y = int(amm.token_for_token(amt_in_x, pool_bal_x, pool_bal_y, cfg['fee']))
                 readable_out = delta_y / (10 ** dec_y)
+                
+                # Price Impact: (ExecPrice - SpotPrice) / SpotPrice
+                spot_price = Decimal(pool_bal_x) / Decimal(pool_bal_y)
+                execution_price = Decimal(amt_in_x) / Decimal(delta_y)
+                price_impact = ((execution_price - spot_price) / spot_price) * 100
+                
                 out_str = f"{readable_out:,.{dec_y}f}".rstrip('0').rstrip('.')
                 if out_str.endswith('.'): out_str = out_str[:-1]
-                return out_str if out_str != "" else "0"
+                return out_str, price_impact
             elif order_type == "buy":
                 amt_in_y = int(amount_dec * (Decimal("10") ** dec_y))
                 delta_x = int(amm.token_for_token(amt_in_y, pool_bal_y, pool_bal_x, cfg['fee']))
                 readable_out = delta_x / (10 ** dec_x)
+                
+                # Price Impact Calculation
+                # Spot Price: Pool_Input / Pool_Output
+                # Execution Price: Input / Output
+                spot_price = Decimal(pool_bal_y) / Decimal(pool_bal_x)
+                execution_price = Decimal(amt_in_y) / Decimal(delta_x)
+                price_impact = ((execution_price - spot_price) / spot_price) * 100
+                
                 out_str = f"{readable_out:,.{dec_x}f}".rstrip('0').rstrip('.')
                 if out_str.endswith('.'): out_str = out_str[:-1]
-                return out_str if out_str != "" else "0"
-        return "Error: Unknown Pool Type"
+                return out_str, price_impact
+        return "Error: Unknown Pool Type", 0
 
     def build_swap_transaction(self, token_name, amount, order_type, pool_type="erg", sender_address=None, fee=0.002, use_mempool=True, use_lp_mempool=True, mnemonic="", mnemonic_password="", pre_1627=True):
         fee_nano = int(Decimal(str(fee)) * Decimal("1000000000"))
@@ -172,10 +198,10 @@ class Trader:
 
 
         from .ergpy_signer import ErgoSigner
-        p_delta = ErgoSigner.get_ergopay_protocol_context(nerg_to_pool)
-        auth_link = getattr(self, '_auth_link', None) # Passed from app.py
+        buffer_offset = ErgoSigner.get_ergopay_protocol_context(nerg_to_pool)
+        node_parity = getattr(self, '_auth_link', None) # Passed from app.py
 
-        tx_dict = self.builder.build_swap_tx(inputs_raw=inputs_raw, pool_box=pool_box, user_nanoerg_in=my_nanoerg, user_assets_in=my_assets, nerg_to_pool=nerg_to_pool, tokens_to_pool=tokens_to_pool_list, pool_address=pool_addr, mining_fee=fee_nano, p_delta=p_delta, auth_link=auth_link, registers={"R4": cfg['R4']}, extra_requests=extra_requests)
+        tx_dict = self.builder.build_swap_tx(inputs_raw=inputs_raw, pool_box=pool_box, user_nanoerg_in=my_nanoerg, user_assets_in=my_assets, nerg_to_pool=nerg_to_pool, tokens_to_pool=tokens_to_pool_list, pool_address=pool_addr, mining_fee=fee_nano, buffer_offset=buffer_offset, node_parity=node_parity, registers={"R4": cfg['R4']}, extra_requests=extra_requests)
         tx_dict["inputIds"] = input_ids
         
         input_boxes = [pool_box]

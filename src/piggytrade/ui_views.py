@@ -6,7 +6,7 @@ from toga.style.pack import COLUMN, ROW, CENTER, RIGHT, START
 from .platform_setup import IS_ANDROID
 from .theme import (
     COLOR_BG, COLOR_CARD, COLOR_INPUT_BG, COLOR_SELECTION_BG, COLOR_INPUT_TEXT, COLOR_INPUT_HINT, COLOR_CHIP, COLOR_QUICK,
-    COLOR_TEXT, COLOR_ACCENT, COLOR_DANGER, COLOR_BLUE,
+    COLOR_TEXT, COLOR_ACCENT, COLOR_DANGER, COLOR_BLUE, COLOR_TEXT_DIM,
     FONT_SIZE_SM, FONT_SIZE_BASE, FONT_SIZE_MD, FONT_SIZE_LG, FONT_SIZE_XL, FONT_SIZE_ICON,
     FONT_WEIGHT_BOLD, LABEL_WIDTH, ICON_COG, ICON_WALLET, ICON_PLUS,
     ICON_TRASH, ICON_SWAP_VERT, ICON_BACK, ICON_PASTE, FONT_FAMILY_ICONS,
@@ -314,8 +314,10 @@ def build_main_view(app):
     app.to_top_row.add(app.btn_to)
     to_card.add(app.to_top_row)
     
-    to_bot_row = toga.Box(style=Pack(direction=ROW, align_items=CENTER))
-    app.lbl_to_balance = toga.Label("", style=Pack(color="#AAAAAA", background_color="transparent", font_size=FONT_SIZE_SM, flex=1, text_align=RIGHT, padding_right=10, padding_bottom=5))
+    to_bot_row = toga.Box(style=Pack(direction=ROW, align_items=CENTER, padding_left=20, padding_right=20))
+    app.lbl_impact = toga.Label("", style=Pack(color=COLOR_TEXT_DIM, background_color="transparent", font_size=FONT_SIZE_SM, flex=1))
+    app.lbl_to_balance = toga.Label("", style=Pack(color="#AAAAAA", background_color="transparent", font_size=FONT_SIZE_SM, flex=1, text_align=RIGHT, padding_bottom=5))
+    to_bot_row.add(app.lbl_impact)
     to_bot_row.add(app.lbl_to_balance)
     to_card.add(to_bot_row)
 
@@ -547,9 +549,29 @@ def build_add_wallet_view(app):
     else:
         app.sw_w_legacy = toga.Switch("", value=False) # Keep the object for logic but don't add to UI
 
+    # Wrap password fields so we can hide them
+    app.box_w_pass = toga.Box(style=Pack(direction=COLUMN))
     app.inp_w_pass = apply_android_border(toga.PasswordInput(placeholder="Encryption Password", style=Pack(margin_bottom=10, font_size=FONT_SIZE_LG, color=COLOR_INPUT_TEXT, background_color=COLOR_INPUT_BG), on_change=app.update_save_wallet_btn), radius=10)
-    app.inp_w_pass2 = apply_android_border(toga.PasswordInput(placeholder="Confirm Password", style=Pack(margin_bottom=20, font_size=FONT_SIZE_LG, color=COLOR_INPUT_TEXT, background_color=COLOR_INPUT_BG), on_change=app.update_save_wallet_btn), radius=10)
-    app.box_w_mnem.add(app.inp_w_mnem); app.box_w_mnem.add(app.inp_w_pass); app.box_w_mnem.add(app.inp_w_pass2)
+    app.inp_w_pass2 = apply_android_border(toga.PasswordInput(placeholder="Confirm Password", style=Pack(margin_bottom=10, font_size=FONT_SIZE_LG, color=COLOR_INPUT_TEXT, background_color=COLOR_INPUT_BG), on_change=app.update_save_wallet_btn), radius=10)
+    app.box_w_pass.add(app.inp_w_pass); app.box_w_pass.add(app.inp_w_pass2)
+    
+    is_android = IS_ANDROID
+    is_available = is_android and hasattr(app, 'bio_helper') and getattr(app.bio_helper, 'available', False)
+    
+    app.bio_row = toga.Box(style=Pack(direction=ROW, align_items=CENTER, margin_bottom=20, visibility=('visible' if is_android else 'hidden')))
+    app.sw_w_bio = toga.Switch("", value=False, enabled=is_available, on_change=app.on_bio_toggle)
+    
+    if is_available:
+        bio_label_text = "Use Fingerprint for Security"
+        bio_color = COLOR_TEXT
+    else:
+        bio_label_text = "Biometrics Unavailable"
+        bio_color = COLOR_TEXT_DIM
+        
+    app.bio_row.add(toga.Label(bio_label_text, style=Pack(color=bio_color, flex=1, font_size=FONT_SIZE_BASE)))
+    app.bio_row.add(app.sw_w_bio)
+    
+    app.box_w_mnem.add(app.inp_w_mnem); app.box_w_mnem.add(app.box_w_pass); app.box_w_mnem.add(app.bio_row)
 
     # Address box — hidden by default, shown only when Read Only toggle is on
     app.box_w_addr = toga.Box(style=Pack(direction=COLUMN, visibility='hidden', height=0, margin_left=10, margin_right=15))
@@ -780,8 +802,19 @@ def build_review_tx_view(app):
     j_row.add(app.sw_json)
     box.add(j_row)
     
-    app.inp_rev_pass = apply_android_border( toga.PasswordInput(placeholder="Wallet Password", style=Pack(margin_bottom=10, color=COLOR_INPUT_TEXT, background_color=COLOR_INPUT_BG)), radius=10)
-    box.add(app.inp_rev_pass)
+    # Biometric/Password container
+    app.box_rev_auth = toga.Box(style=Pack(direction=COLUMN, margin_bottom=10))
+    
+    app.lbl_rev_bio_hint = toga.Label("🔒 Biometric Security Active", style=Pack(color=COLOR_ACCENT, font_size=FONT_SIZE_BASE, margin_bottom=5, text_align=CENTER))
+    app.btn_rev_show_pass = toga.Button("Use Password Instead", on_press=app.show_password_input, style=Pack(color=COLOR_TEXT_DIM, font_size=FONT_SIZE_SM, margin_bottom=5))
+    
+    app.inp_rev_pass = apply_android_border( toga.PasswordInput(placeholder="Wallet Password", style=Pack(color=COLOR_INPUT_TEXT, background_color=COLOR_INPUT_BG)), radius=10)
+    
+    app.box_rev_auth.add(app.lbl_rev_bio_hint)
+    app.box_rev_auth.add(app.btn_rev_show_pass)
+    app.box_rev_auth.add(app.inp_rev_pass)
+    
+    box.add(app.box_rev_auth)
     
     btn_row = toga.Box(style=Pack(direction=ROW))
     btn_cancel = apply_android_border( toga.Button("Cancel", style=Pack(color=BTN_CANCEL_REV_FONT_COLOR, background_color=BTN_CANCEL_REV_COLOR, flex=1), on_press=lambda w: app.navigate_to("main")), radius=10)

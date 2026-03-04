@@ -39,11 +39,12 @@ requires = [
     "requests",
     "cryptography",
 ]
-permissions = ["INTERNET"]
+permissions = ["INTERNET", "USE_BIOMETRIC"]
 extra_manifest_application_attributes = { "android:usesCleartextTraffic" = "true" }
 build_gradle_dependencies = [
     "androidx.appcompat:appcompat:1.6.1",
     "androidx.multidex:multidex:2.0.1",
+    "androidx.biometric:biometric:1.1.0",
 ]
 build_gradle_extra_content = """
 configurations {
@@ -51,6 +52,7 @@ configurations {
 }
 dependencies {
     implementation fileTree(dir: 'src/main/python/piggytrade/resources', include: ['*.jar'])
+    implementation "androidx.biometric:biometric:1.1.0"
 }
 """
 

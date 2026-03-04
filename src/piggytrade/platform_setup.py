@@ -39,11 +39,12 @@ def setup_java_bridge():
     if IS_ANDROID:
         print("[piggytrade] Android: Shimming jnius via Chaquopy...", flush=True)
         try:
-            from java import jclass
+            from java import jclass, dynamic_proxy, static_proxy
             mock_jnius = types.ModuleType('jnius')
             mock_jnius.autoclass = jclass
+            mock_jnius.dynamic_proxy = dynamic_proxy
+            mock_jnius.static_proxy = static_proxy
             
-
             def java_method(signature, name=None):
                 def decorator(fn): return fn
                 return decorator
@@ -60,7 +61,7 @@ def setup_java_bridge():
             mock_jnius.cast = lambda java_class, obj: obj # Android chaquopy fallback
             
             sys.modules['jnius'] = mock_jnius
-            print("[piggytrade] Android: jnius shim (via Chaquopy) complete.", flush=True)
+            print("[piggytrade] Android: jnius/chaquopy shim complete.", flush=True)
         except ImportError:
             print("[piggytrade] Not running on Chaquopy or bridge missing.", flush=True)
     else:

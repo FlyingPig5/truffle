@@ -21,6 +21,7 @@ COLOR_DANGER   = "#FF4D4D"   # Danger / delete / LIVE mode color
 COLOR_BLUE     = "#58A6FF"   # Informational / JSON viewer text
 COLOR_ICON     = "#FFFFFF"   # Icon color
 COLOR_ORANGE   = "#FF8C00"   # Orange for special import
+COLOR_TEXT_DIM = "#AAAAAA"  # Dimmed text color
 
 # --- Font Sizes ---
 FONT_SIZE_SM   = 8   # Small: JSON viewer, minor labels

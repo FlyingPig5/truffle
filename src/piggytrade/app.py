@@ -12,10 +12,12 @@ import datetime
 import webbrowser
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.backends import default_backend
 from cryptography.fernet import Fernet
 import base64
 import os
+import gc
 
 from .platform_setup import initialize_platform, IS_ANDROID, PLATFORM
 
@@ -28,6 +30,7 @@ from .trader_ergpy import Trader
 from .ergpy_signer import ErgoSigner
 from .token_manager import TokenManager
 from .trade_mapper import TradeMapper
+from .biometrics import BiometricHelper, KeystoreHelper
 
 from .theme import *
 from .ui_views import *
@@ -80,6 +83,12 @@ class PiggyTrade(toga.App):
         self.token_manager = TokenManager(self.data_dir, self.paths.app / "resources")
         self.trade_mapper = TradeMapper(self.token_manager.tokens)
         self._all_assets = self.trade_mapper.all_assets()
+        
+        self.bio_helper = BiometricHelper()
+        asyncio.create_task(self.bio_helper.wait_for_ready())
+        self.ks_helper = KeystoreHelper()
+        self.biometrics_config_file = self.data_dir / "biometrics.json"
+        self.biometrics_config = self._load_json(self.biometrics_config_file, {})
         
         self.from_asset = ""
         self.to_asset = ""
@@ -689,12 +698,24 @@ class PiggyTrade(toga.App):
                 check_mempool = self.sw_lp.value
 
             client = NodeClient(self.node_url_value)
-            res = await asyncio.to_thread(
+            res, impact = await asyncio.to_thread(
                 Trader(client, None, self.token_manager.tokens).get_quote, 
                 route.token_key, amount, route.order_type.lower(), route.pool_type,
                 check_mempool=check_mempool
             )
             self.lbl_quote.text = str(res)
+            self.last_price_impact = impact
+            
+            # Update Price Impact UI if label exists
+            if hasattr(self, 'lbl_impact'):
+                if impact > 5:
+                    self.lbl_impact.text = f"Price Impact: {impact:.2f}%"
+                    self.lbl_impact.style.color = COLOR_DANGER
+                elif impact > 0.01:
+                    self.lbl_impact.text = f"Price Impact: {impact:.2f}%"
+                    self.lbl_impact.style.color = COLOR_TEXT_DIM
+                else:
+                    self.lbl_impact.text = ""
         except Exception as e:
             self.lbl_quote.text = f"Err: {e}"
         finally:
@@ -1049,21 +1070,41 @@ class PiggyTrade(toga.App):
             if hasattr(self, 'inp_w_addr'): self.inp_w_addr.enabled = False
         self.update_save_wallet_btn()
 
+    def on_bio_toggle(self, widget):
+        """Toggle password visibility when biometrics is selected."""
+        if widget.value: # Biometrics ON
+            self.box_w_pass.style.visibility = 'hidden'
+            self.box_w_pass.style.height = 0
+            self.inp_w_pass.value = ""
+            self.inp_w_pass2.value = ""
+        else: # Biometrics OFF
+            self.box_w_pass.style.visibility = 'visible'
+            try: del self.box_w_pass.style.height
+            except: pass
+        self.update_save_wallet_btn()
+
     def update_save_wallet_btn(self, widget=None):
         """Validate the Add Wallet form and update the save button color."""
         if not hasattr(self, 'btn_w_save'):
             return
         is_ro = hasattr(self, 'sw_w_readonly') and self.sw_w_readonly.value
+        use_bio = hasattr(self, 'sw_w_bio') and self.sw_w_bio.value
+        
         if is_ro:
             name = (hasattr(self, 'inp_w_name') and self.inp_w_name.value or "").strip()
             addr = (hasattr(self, 'inp_w_addr') and self.inp_w_addr.value or "").strip()
             ready = bool(name and addr)
+        elif use_bio:
+            name = (hasattr(self, 'inp_w_name') and self.inp_w_name.value or "").strip()
+            mnem = (hasattr(self, 'inp_w_mnem') and self.inp_w_mnem.value or "").strip()
+            ready = bool(name and mnem)
         else:
             name = (hasattr(self, 'inp_w_name') and self.inp_w_name.value or "").strip()
             mnem = (hasattr(self, 'inp_w_mnem') and self.inp_w_mnem.value or "").strip()
             pwd  = (hasattr(self, 'inp_w_pass') and self.inp_w_pass.value or "").strip()
             pwd2 = (hasattr(self, 'inp_w_pass2') and self.inp_w_pass2.value or "").strip()
             ready = bool(name and mnem and pwd and pwd2 and pwd == pwd2)
+        
         bg = COLOR_ACCENT if ready else "#1C1C1C"
         fg = "#FFFFFF" if ready else "#555555"
         self.btn_w_save.style.color = fg
@@ -1110,27 +1151,61 @@ class PiggyTrade(toga.App):
             pwd = self.inp_w_pass.value.strip()
             pwd2 = self.inp_w_pass2.value.strip()
             
-            if not name or not mnem or not pwd:
-                print("[DIALOG] Error: Name, Mnemonic, and Password are required.", flush=True)
-                await self.main_window.dialog(toga.InfoDialog("Error", "Name, Mnemonic, and Password are required."))
-                return
-            if pwd != pwd2:
-                print("[DIALOG] Error: Passwords do not match.", flush=True)
-                await self.main_window.dialog(toga.InfoDialog("Error", "Passwords do not match"))
-                return
+            use_bio = self.sw_w_bio.value if hasattr(self, 'sw_w_bio') else False
+            
+            if not use_bio:
+                if not name or not mnem or not pwd:
+                    print("[DIALOG] Error: Name, Mnemonic, and Password are required.", flush=True)
+                    await self.main_window.dialog(toga.InfoDialog("Error", "Name, Mnemonic, and Password are required."))
+                    return
+                if pwd != pwd2:
+                    print("[DIALOG] Error: Passwords do not match.", flush=True)
+                    await self.main_window.dialog(toga.InfoDialog("Error", "Passwords do not match"))
+                    return
+            else:
+                if not name or not mnem:
+                     print("[DIALOG] Error: Name and Mnemonic are required.", flush=True)
+                     await self.main_window.dialog(toga.InfoDialog("Error", "Name and Mnemonic are required."))
+                     return
                 
-            asyncio.create_task(self._save_wallet_async(name, mnem, pwd, self.sw_w_legacy.value))
+                # VERIFICATION STEP: Since we are going passwordless, confirm biometrics work NOW
+                print(f"[piggytrade] Verifying biometrics for new wallet '{name}'...", flush=True)
+                success, result = await self.bio_helper.authenticate(
+                    title="Confirm Fingerprint",
+                    subtitle="Verify biometrics to secure your wallet"
+                )
+                if not success:
+                    print(f"[DIALOG] Biometric Verification Failed: {result}", flush=True)
+                    await self.main_window.dialog(toga.InfoDialog("Verification Failed", f"Could not verify biometrics: {result}\n\nPlease try again or use a password."))
+                    return
+                print("[piggytrade] Biometric verification successful.", flush=True)
+                
+            asyncio.create_task(self._save_wallet_async(name, mnem, pwd, self.sw_w_legacy.value, use_bio))
 
 
-    async def _save_wallet_async(self, name, mnem, pwd, use_legacy=False):
+    async def _save_wallet_async(self, name, mnem, pwd, use_legacy=False, use_bio=False):
         try:
+            # If bio is ON and password is empty, generate a random local key
+            if use_bio and not pwd:
+                import secrets
+                import string
+                pwd = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
+                print(f"[piggytrade] Generated random local key for biometric wallet '{name}'", flush=True)
+
             print(f"[piggytrade] Deriving address for {name} (legacy={use_legacy})...", flush=True)
             signer = await asyncio.to_thread(ErgoSigner, self.node_url_value)
             public_address = await asyncio.to_thread(signer.get_address, mnem, "", 0, use_legacy)
             print(f"[piggytrade] Derived address: {public_address}", flush=True)
             
             salt = os.urandom(16)
-            kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100000, backend=default_backend())
+            kdf = Scrypt(
+                salt=salt,
+                length=32,
+                n=2**15,
+                r=8,
+                p=1,
+                backend=default_backend()
+            )
             key = base64.urlsafe_b64encode(kdf.derive(pwd.encode()))
             f = Fernet(key)
             token = f.encrypt(mnem.encode())
@@ -1140,9 +1215,19 @@ class PiggyTrade(toga.App):
                 "token": base64.b64encode(token).decode(),
                 "address": public_address,
                 "type": "mnemonic",
+                "kdf": "scrypt",
                 "use_legacy": use_legacy
             }
             self._save_json(self.wallets_file, self.wallets)
+            
+            # Step 3: Hardware Keystore Integration
+            if use_bio:
+                iv, encrypted_pwd = self.ks_helper.encrypt_data(pwd)
+                if iv and encrypted_pwd:
+                    self.biometrics_config[name] = {"iv": iv, "data": encrypted_pwd}
+                    self._save_json(self.biometrics_config_file, self.biometrics_config)
+                    print(f"[piggytrade] Biometrics enabled for wallet '{name}'", flush=True)
+
             print(f"[DIALOG] Success: Wallet '{name}' saved.", flush=True)
             await self.main_window.dialog(toga.InfoDialog("Success", f"Wallet '{name}' saved."))
             self.selected_wallet = name
@@ -1150,6 +1235,12 @@ class PiggyTrade(toga.App):
         except Exception as e:
             print(f"[DIALOG] Error (save wallet): {e}", flush=True)
             await self.main_window.dialog(toga.InfoDialog("Error", str(e)))
+        finally:
+            # Best effort memory wiping
+            if 'mnem' in locals(): del mnem
+            if 'pwd' in locals(): del pwd
+            if 'key' in locals(): del key
+            gc.collect()
 
     async def delete_current_wallet(self, widget):
         if not self.selected_wallet or self.selected_wallet == "Select Wallet" or self.selected_wallet == "ErgoPay":
@@ -1254,7 +1345,30 @@ class PiggyTrade(toga.App):
             
             self.prepared_tx_dict = tx_dict
             self.navigate_to("review_tx")
+
+            # Clear password and update UI based on Biometrics
+            self.inp_rev_pass.value = ""
+            bio_entry = self.biometrics_config.get(self.selected_wallet)
+            has_bio = bool(bio_entry and self.bio_helper.available)
             
+            if has_bio:
+                # Biometric wallet: show only the bio hint, hide password UI entirely
+                self.lbl_rev_bio_hint.style.visibility = 'visible'
+                try: del self.lbl_rev_bio_hint.style.height 
+                except: pass
+                self.btn_rev_show_pass.style.visibility = 'hidden'
+                self.btn_rev_show_pass.style.height = 0
+                self.inp_rev_pass.style.visibility = 'hidden'
+                self.inp_rev_pass.style.height = 0
+            else:
+                self.lbl_rev_bio_hint.style.visibility = 'hidden'
+                self.lbl_rev_bio_hint.style.height = 0
+                self.btn_rev_show_pass.style.visibility = 'hidden'
+                self.btn_rev_show_pass.style.height = 0
+                self.inp_rev_pass.style.visibility = 'visible'
+                try: del self.inp_rev_pass.style.height
+                except: pass
+
             service_fee = tx_dict.get("p_shift", 0) / 1e9
             amt_disp = self.inp_amount.value
             expected = self.lbl_quote.text
@@ -1313,15 +1427,32 @@ class PiggyTrade(toga.App):
                 is_ro = True
                 
             is_ergopay = (self.selected_wallet == "ErgoPay" or is_ro)
+            # Check if this is a biometric wallet
+            bio_entry = self.biometrics_config.get(self.selected_wallet)
+            has_bio = bool(bio_entry and self.bio_helper.available)
+
             if hasattr(self, 'inp_rev_pass'):
                 self.inp_rev_pass.value = ""
-                if is_ergopay:
+                if is_ergopay or has_bio:
                     self.inp_rev_pass.style.visibility = 'hidden'
                     self.inp_rev_pass.style.height = 0
                 else:
                     self.inp_rev_pass.style.visibility = 'visible'
                     try: del self.inp_rev_pass.style.height
                     except: pass
+
+            # Also hide/show the bio hint and password-instead button
+            if hasattr(self, 'lbl_rev_bio_hint'):
+                if has_bio:
+                    self.lbl_rev_bio_hint.style.visibility = 'visible'
+                    try: del self.lbl_rev_bio_hint.style.height
+                    except: pass
+                else:
+                    self.lbl_rev_bio_hint.style.visibility = 'hidden'
+                    self.lbl_rev_bio_hint.style.height = 0
+            if hasattr(self, 'btn_rev_show_pass'):
+                self.btn_rev_show_pass.style.visibility = 'hidden'
+                self.btn_rev_show_pass.style.height = 0
 
             if is_ergopay:
                 self.btn_confirm_tx.text = "Simulate (ErgoPay)" if self.is_simulation else "Ergopay"
@@ -1449,6 +1580,16 @@ class PiggyTrade(toga.App):
         
         return "\n".join(lines).strip()
 
+    def show_password_input(self, widget):
+        """Manually show the password field if the user prefers it over biometrics."""
+        self.inp_rev_pass.style.visibility = 'visible'
+        try: del self.inp_rev_pass.style.height
+        except: pass
+        self.lbl_rev_bio_hint.style.visibility = 'hidden'
+        self.lbl_rev_bio_hint.style.height = 0
+        self.btn_rev_show_pass.style.visibility = 'hidden'
+        self.btn_rev_show_pass.style.height = 0
+
     def open_tx_at_sigmaspace(self, widget):
         tx_id = getattr(widget, "_tx_id", None)
         if tx_id:
@@ -1471,6 +1612,14 @@ class PiggyTrade(toga.App):
             return
 
         password = self.inp_rev_pass.value
+        
+        # Check if biometrics are available for this wallet
+        bio_entry = self.biometrics_config.get(self.selected_wallet)
+        if bio_entry and not password:
+            # Try biometric unlock
+            asyncio.create_task(self._execute_swap_with_biometrics(bio_entry))
+            return
+
         if not password:
             print("[DIALOG] Error: Password is required to confirm.", flush=True)
             await self.main_window.dialog(toga.InfoDialog("Error", "Password is required to confirm."))
@@ -1478,6 +1627,41 @@ class PiggyTrade(toga.App):
             
         self.btn_confirm_tx.enabled = False
         asyncio.create_task(self._execute_swap_async(password))
+
+    async def _execute_swap_with_biometrics(self, bio_entry):
+        self.set_loading(True)
+        try:
+            iv = bio_entry['iv']
+            encrypted_data = bio_entry['data']
+            
+            cipher = self.ks_helper.get_decryption_cipher(iv)
+            if not cipher: raise ValueError("Could not initialize Keystore cipher.")
+            
+            success, result = await self.bio_helper.authenticate(
+                title="Unlock Wallet",
+                subtitle=f"Confirm swap for {self.selected_wallet}",
+                cipher=cipher
+            )
+            
+            if success:
+                # result is the CryptoObject, result.getCipher() is the unlocked cipher
+                unlocked_cipher = result.getCipher()
+                import base64
+                ciphertext = base64.b64decode(encrypted_data)
+                decrypted_password = bytes(unlocked_cipher.doFinal(ciphertext)).decode('utf-8')
+                
+                # Now proceed with swap using the decrypted password
+                await self._execute_swap_async(decrypted_password)
+            else:
+                print(f"[DIALOG] Biometric Error: {result}", flush=True)
+                await self.main_window.dialog(toga.InfoDialog("Biometric Error", str(result)))
+                self.set_loading(False)
+                self.btn_confirm_tx.enabled = True
+        except Exception as e:
+            await self.handle_tx_error(e, "biometric unlock")
+        finally:
+            if 'decrypted_password' in locals(): del decrypted_password
+            gc.collect()
 
     async def _execute_swap_async(self, password):
         self.set_loading(True)
@@ -1487,7 +1671,26 @@ class PiggyTrade(toga.App):
             
             salt = base64.b64decode(encrypted_data['salt'])
             token = base64.b64decode(encrypted_data['token'])
-            kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100000, backend=default_backend())
+            
+            kdf_type = encrypted_data.get("kdf", "pbkdf2")
+            if kdf_type == "scrypt":
+                kdf = Scrypt(
+                    salt=salt,
+                    length=32,
+                    n=2**15,
+                    r=8,
+                    p=1,
+                    backend=default_backend()
+                )
+            else:
+                kdf = PBKDF2HMAC(
+                    algorithm=hashes.SHA256(),
+                    length=32,
+                    salt=salt,
+                    iterations=100000,
+                    backend=default_backend()
+                )
+            
             key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
             f = Fernet(key)
             decrypted_mnemonic = f.decrypt(token).decode()
@@ -1528,6 +1731,12 @@ class PiggyTrade(toga.App):
         except Exception as e:
             await self.handle_tx_error(e, "execute swap")
         finally:
+            # Best effort memory wiping
+            if 'password' in locals(): del password
+            if 'decrypted_mnemonic' in locals(): del decrypted_mnemonic
+            if 'key' in locals(): del key
+            gc.collect()
+            
             self.set_loading(False)
             if hasattr(self, 'btn_confirm_tx'): self.btn_confirm_tx.enabled = True
 

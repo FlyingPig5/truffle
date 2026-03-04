@@ -5,6 +5,7 @@ import json
 import base64
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.backends import default_backend
 from cryptography.fernet import Fernet
 import toga
@@ -46,11 +47,13 @@ class WalletManager:
         print(f"[piggytrade] Derived address: {public_address}", flush=True)
         
         salt = os.urandom(16)
-        kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
-            length=32,
+        # Use memory-hard Scrypt to defeat GPU brute-forcing
+        kdf = Scrypt(
             salt=salt,
-            iterations=100000,
+            length=32,
+            n=2**15,
+            r=8,
+            p=1,
             backend=default_backend()
         )
         key = base64.urlsafe_b64encode(kdf.derive(pwd.encode()))
@@ -62,6 +65,7 @@ class WalletManager:
             "token": base64.b64encode(token).decode(),
             "address": public_address,
             "type": "mnemonic",
+            "kdf": "scrypt", # Mark as using the new KDF
             "use_legacy": use_legacy
         }
         self.save()
@@ -71,14 +75,37 @@ class WalletManager:
         """Attempt to decrypt a stored mnemonic using the provided password."""
         salt = base64.b64decode(wallet_data["salt"])
         token = base64.b64decode(wallet_data["token"])
-        kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=salt,
-            iterations=100000,
-            backend=default_backend()
-        )
+        
+        # Check which KDF was used for this wallet
+        kdf_type = wallet_data.get("kdf", "pbkdf2")
+        
+        if kdf_type == "scrypt":
+            kdf = Scrypt(
+                salt=salt,
+                length=32,
+                n=2**15,
+                r=8,
+                p=1,
+                backend=default_backend()
+            )
+        else:
+            # Fallback for old wallets
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=salt,
+                iterations=100000,
+                backend=default_backend()
+            )
+            
         key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
         f = Fernet(key)
-        return f.decrypt(token).decode()
+        decrypted = f.decrypt(token).decode()
+        
+        # Best effort memory wiping of the key
+        del key
+        import gc
+        gc.collect()
+        
+        return decrypted
 

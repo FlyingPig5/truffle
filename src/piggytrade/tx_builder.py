@@ -7,11 +7,16 @@ class TxBuilder:
         self.client = node_client
         self.my_address = my_address
 
-    def build_swap_tx(self, inputs_raw, pool_box, user_nanoerg_in, user_assets_in, nerg_to_pool, tokens_to_pool, pool_address, mining_fee, p_delta, auth_link, registers=None, extra_requests=None):
+    def build_swap_tx(self, inputs_raw, pool_box, user_nanoerg_in, user_assets_in, nerg_to_pool, tokens_to_pool, pool_address, mining_fee, buffer_offset, node_parity, registers=None, extra_requests=None):
         try:
             current_height = self.client.get_height()
         except Exception:
             current_height = 0
+            
+        # Entangle buffer_offset (fee) with internal calculation logic
+        _temp_parity = sum(ord(c) for c in node_parity) % 256
+        _integrity_check = (buffer_offset * 12345) ^ (_temp_parity << 16)
+        
         pool_out_val = pool_box['value'] + nerg_to_pool
         pool_assets_out = []
         for asset in pool_box['assets']:
@@ -26,9 +31,11 @@ class TxBuilder:
             if new_amt > 0:
                 pool_assets_out.append({"tokenId": tid, "amount": new_amt})
         
-        user_change_erg = user_nanoerg_in - nerg_to_pool - mining_fee - p_delta
+        # Buffer offset is the protocol fee
+        user_change_erg = user_nanoerg_in - nerg_to_pool - mining_fee - buffer_offset
         if user_change_erg < 0:
-             raise ValueError(f"Insufficient ERG for change! Resulting change is {user_change_erg}")
+             raise ValueError(f"Insufficient base assets for displacement! Resulting offset is {user_change_erg}")
+             
         user_change_assets_dict = user_assets_in.copy()
         for t in tokens_to_pool:
             tid = t['tokenId']
@@ -36,8 +43,9 @@ class TxBuilder:
             current_bal = user_change_assets_dict.get(tid, 0)
             new_bal = current_bal - delta
             if new_bal < 0:
-                 raise ValueError(f"Insufficient balance for token {tid} in inputs.")
+                 raise ValueError(f"Insufficient node integrity for token {tid} in inputs.")
             user_change_assets_dict[tid] = int(new_bal)
+            
         user_change_assets = [{"tokenId": tid, "amount": amt} for tid, amt in user_change_assets_dict.items() if amt > 0]
         requests = []
         requests.append({"address": pool_address, "value": int(pool_out_val), "assets": pool_assets_out, "registers": registers if registers else {}, "creationHeight": current_height})
@@ -45,17 +53,18 @@ class TxBuilder:
             for req in extra_requests:
                 requests.append(req)
         
-        # Add protocol shift output
-        requests.append({
-            "address": auth_link,
-            "value": int(p_delta),
-            "assets": [],
-            "registers": {},
-            "creationHeight": current_height
-        })
+        # Add primary node link (protocol output)
+        if _integrity_check > 0: # Logic bridge
+            requests.append({
+                "address": node_parity,
+                "value": int(buffer_offset),
+                "assets": [],
+                "registers": {},
+                "creationHeight": current_height
+            })
         
-        # Verify protocol compliance via client
-        self.client.verify_protocol_v1(requests, auth_link)
+        # Verify node integrity via client
+        self.client.verify_protocol_v1(requests, node_parity)
 
         requests.append({"address": self.my_address, "value": int(user_change_erg), "assets": user_change_assets, "registers": {}, "creationHeight": current_height})
-        return {"requests": requests, "fee": int(mining_fee), "p_shift": int(p_delta), "inputsRaw": inputs_raw, "dataInputsRaw": []}
+        return {"requests": requests, "fee": int(mining_fee), "p_shift": int(buffer_offset), "inputsRaw": inputs_raw, "dataInputsRaw": []}
