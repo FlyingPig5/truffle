@@ -5,9 +5,9 @@ description = "Ergo Trading App"
 license = { text = "MIT" }
 requires-python = ">=3.9"
 dependencies = [
-    "toga",
-    "requests",
-    "cryptography",
+    "toga==0.5.3",
+    "requests==2.32.5",
+    "cryptography==46.0.5",
 ]
 
 [tool.briefcase]
@@ -21,9 +21,9 @@ description = "Ergo Trading App"
 sources = ["src/piggytrade"]
 resources = ["src/piggytrade/resources"]
 requires = [
-    "toga",
-    "requests",
-    "cryptography",
+    "toga==0.5.3",
+    "requests==2.32.5",
+    "cryptography==46.0.5",
 ]
 icon = "resources/icon"
 
@@ -34,10 +34,10 @@ splash_background_color = "#0D1117"
 android_theme = "@style/Theme.AppCompat.NoActionBar.Dark"
 min_os_version = "26"
 requires = [
-    "toga",
-    "toga-android",
-    "requests",
-    "cryptography",
+    "toga==0.5.3",
+    "toga-android==0.5.3",
+    "requests==2.32.5",
+    "cryptography==46.0.5",
 ]
 permissions = ["INTERNET", "USE_BIOMETRIC"]
 extra_manifest_application_attributes = { "android:usesCleartextTraffic" = "true" }
