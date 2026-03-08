@@ -95,7 +95,7 @@ fun MainScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp, vertical = 5.dp)
-                        .height(50.dp)
+                        .height(60.dp)
                         .androidBorder(radius = 12.dp, borderWidth = 0.dp, bgColor = ColorInputBg),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -115,7 +115,7 @@ fun MainScreen(
                             Text(
                                 text = walletName.replace(" (Ergopay)", ""),
                                 color = Color.White,
-                                fontSize = 14.sp,
+                                fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
