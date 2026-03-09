@@ -227,6 +227,8 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
     private var nodeClient: NodeClient? = null
     private var trader: Trader? = null
 
+    // ─── INIT & NODE MANAGEMENT ──────────────────────────────────────────────
+
     private suspend fun initializeNodeClient() {
         withContext(kotlinx.coroutines.Dispatchers.IO) {
             try {
@@ -264,6 +266,8 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ─── BALANCES & FORMATTING ───────────────────────────────────────────────
+
     fun formatBalance(tokenId: String, amount: Long): String {
         if (tokenId == "ERG") return String.format("%.4f", amount.toDouble() / 1_000_000_000.0)
         val decimals = tokenRepository.getTokenDecimals(tokenId)
@@ -299,6 +303,8 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         val amount = current.walletTokens[id] ?: return null
         return formatBalance(id, amount)
     }
+
+    // ─── UI STATE SETTERS (DEX) ──────────────────────────────────────────────
 
     fun setFromAsset(asset: String) {
         _uiState.value = _uiState.value.copy(
@@ -411,6 +417,8 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
     fun setSelectionContext(context: String) {
         _uiState.value = _uiState.value.copy(selectionContext = context)
     }
+
+    // ─── WALLET OPERATIONS ───────────────────────────────────────────────────
 
     fun fetchWalletBalances() {
         val address = _uiState.value.selectedAddress
@@ -668,6 +676,8 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         return tokenRepository.tokens.values.any { it["id"] == tokenId }
     }
 
+    // ─── QUOTE & TX PREPARATION ──────────────────────────────────────────────
+
     private fun fetchQuote() {
         val current = _uiState.value
         val amount = current.fromAmount.toDoubleOrNull() ?: 0.0
@@ -736,6 +746,8 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
     }
+
+    // ─── TOKEN & PAIR LOGIC ──────────────────────────────────────────────────
 
     fun getReachableTokens(): List<String> {
         val from = _uiState.value.fromAsset
@@ -806,6 +818,8 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         }
         return sb.toString()
     }
+
+    // ─── SWAP EXECUTION ──────────────────────────────────────────────────────
 
     fun prepareSwap(onSuccess: () -> Unit, onError: (String) -> Unit) {
         val current = _uiState.value
@@ -1002,6 +1016,8 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    // ─── SYNC & DATA MANAGEMENT ──────────────────────────────────────────────
 
     fun syncTokenList(isFirstLaunch: Boolean = false) {
         val client = nodeClient ?: return
