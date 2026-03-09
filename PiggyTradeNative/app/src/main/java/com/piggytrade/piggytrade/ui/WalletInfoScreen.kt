@@ -16,12 +16,15 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 
 @Composable
 fun WalletInfoScreen(
     walletName: String,
     viewModel: SwapViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onNavigateToAddWallet: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -56,7 +59,8 @@ fun WalletInfoScreen(
             walletName = walletName,
             viewModel = viewModel,
             onDeleteComplete = onBack,
-            showTitle = false
+            showTitle = false,
+            onNavigateToAddWallet = onNavigateToAddWallet
         )
     }
 }
@@ -66,7 +70,8 @@ fun WalletInfoContent(
     walletName: String,
     viewModel: SwapViewModel,
     onDeleteComplete: (() -> Unit)? = null,
-    showTitle: Boolean = true
+    showTitle: Boolean = true,
+    onNavigateToAddWallet: (() -> Unit)? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var showDeleteConfirm1 by remember { mutableStateOf(false) }
@@ -115,12 +120,23 @@ fun WalletInfoContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
-                    text = "WALLETS",
-                    color = ColorAccent,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (onNavigateToAddWallet != null) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = ColorSelectionBg,
+                            modifier = Modifier.clickable { onNavigateToAddWallet() }
+                        ) {
+                            Text(
+                                text = "Add Wallet",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
                 
                 if (walletName.isNotEmpty() && walletName != "Select Wallet") {
                     IconButton(onClick = { showDeleteConfirm1 = true }, modifier = Modifier.size(24.dp)) {
@@ -187,21 +203,41 @@ fun WalletInfoContent(
             shape = MaterialTheme.shapes.large
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
-                Text("Address", color = ColorTextDim, fontSize = 12.sp)
-                Text(
-                    text = uiState.selectedAddress,
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    modifier = Modifier.padding(vertical = 5.dp)
-                )
+                val clipboardManager = LocalClipboardManager.current
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val displayAddress = if (uiState.selectedAddress.length > 20) {
+                        "Address: ${uiState.selectedAddress.take(8)}...${uiState.selectedAddress.takeLast(8)}"
+                    } else {
+                        "Address: ${uiState.selectedAddress}"
+                    }
+                    Text(
+                        text = displayAddress,
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(
+                        onClick = { 
+                            clipboardManager.setText(AnnotatedString(uiState.selectedAddress))
+                        },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Text(
+                            text = "\uE14D", // content_copy
+                            color = ColorAccent,
+                            fontSize = 18.sp,
+                            fontFamily = MaterialDesignIcons
+                        )
+                    }
+                }
                 
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(15.dp))
                 
                 Text("Balance", color = ColorTextDim, fontSize = 12.sp)
                 Text(
                     text = String.format("%.4f ERG", uiState.walletErgBalance),
                     color = ColorAccent,
-                    fontSize = 24.sp,
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
                 )
                 

@@ -91,7 +91,8 @@ class MainActivity : FragmentActivity() {
                         "wallet_info" -> WalletInfoScreen(
                             walletName = selectedWalletForInfo,
                             viewModel = viewModel,
-                            onBack = { currentScreen = "main" }
+                            onBack = { currentScreen = "main" },
+                            onNavigateToAddWallet = { currentScreen = "add_wallet" }
                         )
                         "settings" -> SettingsScreen(
                             viewModel = viewModel,

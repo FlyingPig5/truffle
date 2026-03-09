@@ -142,9 +142,6 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 displayWallets.add(name)
             }
         }
-        if (!displayWallets.contains("ErgoPay")) {
-            displayWallets.add("ErgoPay")
-        }
 
         // Favorites: Dynamic based on settings. 1st is ERG.
         val numFavs = (preferenceManager.loadSettings()[PreferenceManager.KEY_NUM_FAVORITES] as? Number)?.toInt() ?: 8
@@ -163,8 +160,9 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         val initialNodeIndex = nodesList.indexOfFirst { it.endsWith(initialNodeUrl) }.coerceAtLeast(0)
 
         val initialWalletDisplay = preferenceManager.selectedWallet.let { 
-            if (it.isEmpty() || it == "Select Wallet") "ErgoPay" 
-            else {
+            if (it.isEmpty() || it == "Select Wallet") {
+                displayWallets.firstOrNull() ?: "Select Wallet"
+            } else {
                 val data = savedWallets[it] as? Map<String, Any>
                 if (data?.get("type") == "ergopay") "$it (Ergopay)" else it
             }
@@ -641,18 +639,17 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 val wtype = (data as? Map<String, Any>)?.get("type") == "ergopay"
                 if (wtype) displayWallets.add("$wname (Ergopay)") else displayWallets.add(wname)
             }
-            if (!displayWallets.contains("ErgoPay")) displayWallets.add("ErgoPay")
 
             val current = _uiState.value
             val newSelectedWallet = if (rawName == current.selectedWallet.replace(" (Ergopay)", "").trim()) {
-                val firstRealWallet = displayWallets.firstOrNull { it != "ErgoPay" } ?: "ErgoPay"
+                val firstRealWallet = displayWallets.firstOrNull() ?: "Select Wallet"
                 preferenceManager.selectedWallet = firstRealWallet.replace(" (Ergopay)", "").trim()
                 firstRealWallet
             } else {
                 current.selectedWallet
             }
             
-            val newAddress = if (newSelectedWallet != "ErgoPay") {
+            val newAddress = if (newSelectedWallet != "Select Wallet") {
                 val data = wallets[newSelectedWallet.replace(" (Ergopay)", "").trim()] as? Map<String, Any>
                 data?.get("address") as? String ?: ""
             } else ""
@@ -665,7 +662,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 walletTokens = emptyMap()
             )
             
-            if (newSelectedWallet != "ErgoPay" && newAddress.isNotEmpty()) {
+            if (newSelectedWallet != "Select Wallet" && newAddress.isNotEmpty()) {
                 fetchWalletBalances()
             }
         }
