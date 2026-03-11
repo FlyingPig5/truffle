@@ -94,7 +94,7 @@ interface ErgoNodeApi {
 
 }
 
-class NodeClient(private val nodeUrl: String) {
+class NodeClient(val nodeUrl: String) {
 
     val api: ErgoNodeApi
 
@@ -137,13 +137,7 @@ class NodeClient(private val nodeUrl: String) {
         var offset = 0
         val limit = 1000
         while (true) {
-            val data = api.getUnspentBoxesByAddress(
-                address = address,
-                offset = offset,
-                limit = limit,
-                includeUnconfirmed = checkMempool,
-                excludeMempoolSpent = checkMempool
-            )
+            val data = fetchBoxesByAddress(address, offset, limit, checkMempool)
             if (data.isEmpty()) break
             for (box in data) {
                 myBoxes.add(box)
@@ -161,14 +155,72 @@ class NodeClient(private val nodeUrl: String) {
         return Triple(myAssets, nanoerg, myBoxes)
     }
 
+    /**
+     * Fetch unspent boxes by address, progressively stripping mempool params
+     * if the node returns 400 (older nodes may not support them).
+     */
+    private suspend fun fetchBoxesByAddress(
+        address: String,
+        offset: Int,
+        limit: Int,
+        checkMempool: Boolean
+    ): List<Map<String, Any>> {
+        // Attempt 1: full params
+        val attempt1 = runCatching {
+            api.getUnspentBoxesByAddress(address, offset, limit, includeUnconfirmed = checkMempool, excludeMempoolSpent = checkMempool)
+        }
+        if (attempt1.isSuccess) return attempt1.getOrThrow()
+
+        val err1 = attempt1.exceptionOrNull()
+        if (err1 is retrofit2.HttpException && err1.code() == 400) {
+            android.util.Log.w("NodeClient", "byAddress 400 with excludeMempoolSpent — retrying without")
+
+            // Attempt 2: drop excludeMempoolSpent
+            val attempt2 = runCatching {
+                api.getUnspentBoxesByAddress(address, offset, limit, includeUnconfirmed = checkMempool, excludeMempoolSpent = false)
+            }
+            if (attempt2.isSuccess) return attempt2.getOrThrow()
+
+            val err2 = attempt2.exceptionOrNull()
+            if (err2 is retrofit2.HttpException && err2.code() == 400) {
+                android.util.Log.w("NodeClient", "byAddress 400 without excludeMempoolSpent — retrying without includeUnconfirmed")
+
+                // Attempt 3: drop both mempool params (use defaults)
+                val attempt3 = runCatching {
+                    api.getUnspentBoxesByAddress(address, offset, limit, includeUnconfirmed = false, excludeMempoolSpent = false)
+                }
+                if (attempt3.isSuccess) return attempt3.getOrThrow()
+
+                val err3 = attempt3.exceptionOrNull()
+                val body = (err3 as? retrofit2.HttpException)?.response()?.errorBody()?.string() ?: err3?.message ?: "unknown"
+                throw Exception("[$nodeUrl] byAddress failed all 3 attempts. Last error: ${(err3 as? retrofit2.HttpException)?.code()} — $body")
+            }
+        }
+
+        // Re-throw original if not a 400
+        val body = (err1 as? retrofit2.HttpException)?.response()?.errorBody()?.string() ?: err1?.message ?: "unknown"
+        throw Exception("[$nodeUrl] byAddress HTTP ${(err1 as? retrofit2.HttpException)?.code()} — $body")
+    }
+
     suspend fun getPoolBox(tokenId: String, checkMempool: Boolean): Map<String, Any>? {
-        val boxes = api.getUnspentBoxesByTokenId(
-            tokenId = tokenId,
-            offset = 0,
-            limit = 1,
-            includeUnconfirmed = checkMempool
-        )
-        return boxes.firstOrNull()
+        return try {
+            val boxes = api.getUnspentBoxesByTokenId(
+                tokenId = tokenId,
+                offset = 0,
+                limit = 1,
+                includeUnconfirmed = checkMempool
+            )
+            boxes.firstOrNull()
+        } catch (e: retrofit2.HttpException) {
+            val body = e.response()?.errorBody()?.string() ?: ""
+            android.util.Log.e("NodeClient", "getPoolBox HTTP ${e.code()} for token $tokenId at $nodeUrl — $body")
+            throw Exception(
+                "Node at $nodeUrl returned HTTP ${e.code()} for blockchain index query.\n" +
+                "This node may not have the blockchain indexer enabled.\n" +
+                "Try switching to a node that supports /blockchain/ API endpoints.\n" +
+                "Details: $body"
+            )
+        }
     }
 
     suspend fun getBoxBytes(boxIds: List<String>): List<String> {

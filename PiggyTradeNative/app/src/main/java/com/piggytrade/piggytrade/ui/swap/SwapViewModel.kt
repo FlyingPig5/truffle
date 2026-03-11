@@ -755,11 +755,22 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val protocol = StablecoinRegistry.getById(_uiState.value.activeProtocolId) ?: return@launch
             val client = nodeClient ?: return@launch
+            val address = _uiState.value.selectedAddress
+            if (address.isEmpty()) {
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(
+                        isBankLoading = false,
+                        bankError = "No wallet selected. Please select a wallet first."
+                    )
+                }
+                return@launch
+            }
             withContext(Dispatchers.Main) {
                 _uiState.value = _uiState.value.copy(isBankLoading = true, bankError = null)
             }
             try {
-                val eligibility = protocol.checkEligibility(client, _uiState.value.selectedAddress, _uiState.value.includeUnconfirmed)
+                android.util.Log.d("BankVM", "checkEligibility using node: ${client.nodeUrl}, address: $address, protocol: ${protocol.id}")
+                val eligibility = protocol.checkEligibility(client, address, _uiState.value.includeUnconfirmed)
                 withContext(Dispatchers.Main) {
                     _uiState.value = _uiState.value.copy(bankEligibility = eligibility, isBankLoading = false)
                 }

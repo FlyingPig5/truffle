@@ -82,11 +82,15 @@ class UseFreemintProtocol : StablecoinProtocol {
                 statusFields = fields
             )
         } catch (e: Exception) {
-            Log.e(TAG, "checkEligibility failed: ${e.message}", e)
+            val detail = if (e is retrofit2.HttpException) {
+                val body = e.response()?.errorBody()?.string() ?: ""
+                "HTTP ${e.code()} — $body"
+            } else e.message ?: "Unknown error"
+            Log.e(TAG, "checkEligibility failed: $detail", e)
             EligibilityResult(
                 canMint = false,
-                reason = "Could not fetch protocol state: ${e.message}",
-                statusFields = listOf(StatusField("Error", e.message ?: "Unknown", StatusField.Status.ERROR))
+                reason = "Protocol state error: $detail",
+                statusFields = listOf(StatusField("Error", detail, StatusField.Status.ERROR))
             )
         }
     }
