@@ -27,6 +27,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.material3.pulltorefresh.PullToRefreshContainer
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.Alignment.Companion.TopCenter
 import kotlinx.coroutines.delay
 
@@ -275,7 +276,7 @@ fun WalletInfoContent(
                 
                 Text("Balance", color = ColorTextDim, fontSize = 12.sp)
                 Text(
-                    text = String.format("%.5f ERG", uiState.walletErgBalance),
+                    text = "${SwapViewModel.formatErg(uiState.walletErgBalance)} ERG",
                     color = ColorAccent,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
@@ -325,11 +326,33 @@ fun WalletInfoContent(
                     )
                 }
             } else {
+                var isTokensExpanded by remember { mutableStateOf(false) }
+                val tokensToDisplay = if (isTokensExpanded) sortedTokens else sortedTokens.take(5)
+
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().weight(1f)
                 ) {
-                    items(sortedTokens) { (tokenId, amount) ->
+                    items(tokensToDisplay) { (tokenId, amount) ->
                         TokenBalanceItem(tokenId, amount, viewModel)
+                    }
+
+                    if (sortedTokens.size > 5) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { isTokensExpanded = !isTokensExpanded }
+                                    .padding(vertical = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = if (isTokensExpanded) "Show Less" else "+${sortedTokens.size - 5}",
+                                    color = ColorAccent,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -403,7 +426,7 @@ fun NetworkTradeHistoryItemView(trade: NetworkTransaction, viewModel: SwapViewMo
                     val symbol = if (trade.netErgChange > 0) "+" else "-"
                     val ergVal = Math.abs(trade.netErgChange.toDouble() / 1_000_000_000.0)
                     val color = if (trade.netErgChange > 0) Color.Green else ColorSent
-                    Text("$symbol${String.format("%.5f", ergVal)} ERG", color = color, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text("$symbol${SwapViewModel.formatErg(ergVal)} ERG", color = color, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
 
                 // TOKEN CHANGES
@@ -456,7 +479,7 @@ fun NetworkTradeHistoryItemView(trade: NetworkTransaction, viewModel: SwapViewMo
             // Right Column - Bottom: Fee
             if (trade.fee > 0L) {
                 Text(
-                    text = "fee: ${String.format("%.5f", trade.fee.toDouble() / 1_000_000_000.0)} ERG",
+                    text = "fee: ${SwapViewModel.formatErg(trade.fee.toDouble() / 1_000_000_000.0)} ERG",
                     color = ColorTextDim,
                     fontSize = 11.sp,
                     modifier = Modifier.align(Alignment.BottomEnd)
@@ -472,8 +495,9 @@ fun NetworkTradeHistoryItemView(trade: NetworkTransaction, viewModel: SwapViewMo
         
         AlertDialog(
             onDismissRequest = { showDetails = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
             containerColor = ColorCard,
-            modifier = Modifier.fillMaxWidth(0.95f),
+            modifier = Modifier.fillMaxWidth(0.98f),
             title = {
                 Text("Transaction Details", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             },
@@ -486,32 +510,37 @@ fun NetworkTradeHistoryItemView(trade: NetworkTransaction, viewModel: SwapViewMo
                         
                         // External Links
                         Text("View on Explorer:", color = ColorAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.height(5.dp))
+                        Spacer(Modifier.height(8.dp))
                         
-                        Text(
-                            "Ergo Explorer", 
-                            color = ColorAccent, 
-                            fontSize = 12.sp, 
-                            modifier = Modifier.clickable { 
-                                uriHandler.openUri("https://explorer.ergoplatform.com/en/transactions/${trade.id}")
-                            }.padding(vertical = 4.dp)
-                        )
-                        Text(
-                            "ErgExplorer", 
-                            color = ColorAccent, 
-                            fontSize = 12.sp, 
-                            modifier = Modifier.clickable { 
-                                uriHandler.openUri("https://ergexplorer.com/transactions#${trade.id}")
-                            }.padding(vertical = 4.dp)
-                        )
-                        Text(
-                            "Sigmaspace.io", 
-                            color = ColorAccent, 
-                            fontSize = 12.sp, 
-                            modifier = Modifier.clickable { 
-                                uriHandler.openUri("https://sigmaspace.io/en/transaction/${trade.id}")
-                            }.padding(vertical = 4.dp)
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                "Ergo Explorer", 
+                                color = ColorAccent, 
+                                fontSize = 11.sp, 
+                                modifier = Modifier.clickable { 
+                                    uriHandler.openUri("https://explorer.ergoplatform.com/en/transactions/${trade.id}")
+                                }
+                            )
+                            Text(
+                                "ErgExplorer", 
+                                color = ColorAccent, 
+                                fontSize = 11.sp, 
+                                modifier = Modifier.clickable { 
+                                    uriHandler.openUri("https://ergexplorer.com/transactions#${trade.id}")
+                                }
+                            )
+                            Text(
+                                "Sigmaspace.io", 
+                                color = ColorAccent, 
+                                fontSize = 11.sp, 
+                                modifier = Modifier.clickable { 
+                                    uriHandler.openUri("https://sigmaspace.io/en/transaction/${trade.id}")
+                                }
+                            )
+                        }
                         
                         Spacer(Modifier.height(15.dp))
                     }
@@ -528,7 +557,7 @@ fun NetworkTradeHistoryItemView(trade: NetworkTransaction, viewModel: SwapViewMo
                         Column(modifier = Modifier.padding(vertical = 5.dp)) {
                             val addr = if (inp.address.length > 20) inp.address.take(10) + "..." + inp.address.takeLast(10) else inp.address
                             Text(addr, color = ColorTextDim, fontSize = 10.sp)
-                            Text("${String.format("%.5f", inp.value.toDouble() / 1_000_000_000.0)} ERG", color = Color.White, fontSize = 12.sp)
+                            Text("${SwapViewModel.formatErg(inp.value.toDouble() / 1_000_000_000.0)} ERG", color = Color.White, fontSize = 12.sp)
                             inp.assets.forEach { map ->
                                 val tId = map["tokenId"] as? String ?: ""
                                 val amt = (map["amount"] as? Number)?.toLong() ?: 0L
@@ -546,7 +575,7 @@ fun NetworkTradeHistoryItemView(trade: NetworkTransaction, viewModel: SwapViewMo
                         Column(modifier = Modifier.padding(vertical = 5.dp)) {
                             val addr = if (out.address.length > 20) out.address.take(10) + "..." + out.address.takeLast(10) else out.address
                             Text(addr, color = ColorTextDim, fontSize = 10.sp)
-                            Text("${String.format("%.5f", out.value.toDouble() / 1_000_000_000.0)} ERG", color = Color.White, fontSize = 12.sp)
+                            Text("${SwapViewModel.formatErg(out.value.toDouble() / 1_000_000_000.0)} ERG", color = Color.White, fontSize = 12.sp)
                             out.assets.forEach { map ->
                                 val tId = map["tokenId"] as? String ?: ""
                                 val amt = (map["amount"] as? Number)?.toLong() ?: 0L

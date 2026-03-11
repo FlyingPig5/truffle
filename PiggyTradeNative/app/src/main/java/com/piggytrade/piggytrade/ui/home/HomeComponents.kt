@@ -39,11 +39,12 @@ fun PiggyTopBar(isLoading: Boolean, onSettingsClick: () -> Unit) {
         ) {
             Text(text = "Piggy", color = ColorText, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Image(
-                painter = painterResource(id = R.drawable.piggytrade),
+                painter = painterResource(id = R.drawable.logo_topbar_and_standard_launcher),
                 contentDescription = "Logo",
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                 modifier = Modifier
-                    .size(32.dp)
-                    .padding(horizontal = 2.dp)
+                    .size(120.dp)
+                    .padding(horizontal = 4.dp)
             )
             Text(text = "Trade", color = ColorText, fontSize = 22.sp, fontWeight = FontWeight.Bold)
         }

@@ -43,7 +43,7 @@ fun WalletSelectorRow(
             ) {
                 Text(text = "Piggy", color = ColorText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Image(
-                    painter = painterResource(id = R.drawable.piggytrade),
+                    painter = painterResource(id = R.drawable.logo_topbar_and_standard_launcher),
                     contentDescription = "Logo",
                     modifier = Modifier.size(24.dp).padding(horizontal = 4.dp)
                 )

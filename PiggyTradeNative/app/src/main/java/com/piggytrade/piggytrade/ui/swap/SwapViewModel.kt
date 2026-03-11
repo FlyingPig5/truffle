@@ -309,7 +309,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
     // ─── BALANCES & FORMATTING ───────────────────────────────────────────────
 
     fun formatBalance(tokenId: String, amount: Long): String {
-        if (tokenId == "ERG") return String.format("%.5f", amount.toDouble() / 1_000_000_000.0)
+        if (tokenId == "ERG") return (amount.toDouble() / 1_000_000_000.0).formatErg()
         val decimals = tokenRepository.getTokenDecimals(tokenId)
         if (decimals == 0) return amount.toString()
         val divisor = Math.pow(10.0, decimals.toDouble())
@@ -325,14 +325,14 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         val tAsset = getTokenId(current.toAsset)
         
         val fBal = if (fAsset == "ERG") {
-            if (walletErg > 0.0) String.format("%.5f", walletErg) else ""
+            if (walletErg > 0.0) walletErg.formatErg() else ""
         } else {
             val amt = walletTokens[fAsset] ?: 0L
             if (amt > 0L) formatBalance(fAsset, amt) else ""
         }
         
         val tBal = if (tAsset == "ERG") {
-            if (walletErg > 0.0) String.format("%.5f", walletErg) else ""
+            if (walletErg > 0.0) walletErg.formatErg() else ""
         } else {
             val amt = walletTokens[tAsset] ?: 0L
             if (amt > 0L) formatBalance(tAsset, amt) else ""
@@ -341,12 +341,27 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = current.copy(fromBalance = fBal, toBalance = tBal)
     }
 
+    private fun Double.formatErg(): String {
+        return java.text.DecimalFormat("0.#####").format(this)
+    }
+
+    private fun Double.formatErg(pattern: String): String {
+        return java.text.DecimalFormat(pattern).format(this)
+    }
+    
+    // Internal helper for components/screens
+    companion object {
+        fun formatErg(value: Double): String {
+            return java.text.DecimalFormat("0.#####").format(value)
+        }
+    }
+
     fun getUserBalance(name: String): String? {
         val id = getTokenId(name)
         val current = _uiState.value
         if (id == "ERG") {
             if (current.walletErgBalance <= 0.0) return null
-            return String.format("%.5f", current.walletErgBalance)
+            return current.walletErgBalance.formatErg()
         }
         val amount = current.walletTokens[id] ?: 0L
         if (amount <= 0L) return null
@@ -1113,7 +1128,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 updateNodeClient() // This refreshes the 'trader' with new token data
                 
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    loadPoolMappings()
+                    loadPoolMappings(fetchLiquidity = true)
                     _uiState.value = _uiState.value.copy(
                         syncProgress = _uiState.value.syncProgress?.copy(isFinished = true)
                     )
@@ -1277,59 +1292,64 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
             val currentWhitelisted = _uiState.value.whitelistedPools
             val currentDiscovered = _uiState.value.discoveredPools
             
-            (currentWhitelisted + currentDiscovered).forEach { mapping ->
-                launch {
-                    try {
-                        val box = client.getPoolBox(mapping.pid, _uiState.value.includeUnconfirmed)
-                        if (box == null) {
-                            updateLiquidityInState(mapping.pid, "Pool not found")
-                            return@launch
-                        }
-                        val assets = box["assets"] as? List<Map<String, Any>> ?: emptyList()
-                        val erg = (box["value"] as? Number)?.toLong() ?: 0L
-                        
-                        val liqStr = if (assets.size >= 3) {
-                            if (!mapping.data.containsKey("id_in")) {
-                                // ERG to Token
-                                val tokenId = mapping.data["id"] as? String ?: ""
-                                val decimals = tokenRepository.getTokenDecimals(tokenId)
-                                val tokenAmt = (assets[2]["amount"] as? Number)?.toLong() ?: 0L
-                                val formattedErg = String.format("%.2f", erg / 1_000_000_000.0)
-                                val formattedToken = if (decimals > 0) {
-                                    String.format("%.2f", tokenAmt / Math.pow(10.0, decimals.toDouble()))
-                                } else {
-                                    tokenAmt.toString()
-                                }
-                                "$formattedErg ERG / $formattedToken ${mapping.name}"
-                            } else {
-                                // Token to Token
-                                if (assets.size >= 4) {
-                                    val t1Id = mapping.data["id_in"] as? String ?: ""
-                                    val t2Id = mapping.data["id_out"] as? String ?: ""
-                                    val t1Name = getTokenName(t1Id)
-                                    val t2Name = getTokenName(t2Id)
-                                    val d1 = tokenRepository.getTokenDecimals(t1Id)
-                                    val d2 = tokenRepository.getTokenDecimals(t2Id)
-                                    val a1 = (assets[2]["amount"] as? Number)?.toLong() ?: 0L
-                                    val a2 = (assets[3]["amount"] as? Number)?.toLong() ?: 0L
-                                    
-                                    val f1 = if (d1 > 0) String.format("%.2f", a1 / Math.pow(10.0, d1.toDouble())) else a1.toString()
-                                    val f2 = if (d2 > 0) String.format("%.2f", a2 / Math.pow(10.0, d2.toDouble())) else a2.toString()
-                                    
-                                    "$f1 $t1Name / $f2 $t2Name"
-                                } else {
-                                    "${String.format("%.2f", erg / 1_000_000_000.0)} ERG"
-                                }
+            val allPools = (currentWhitelisted + currentDiscovered)
+            allPools.chunked(20).forEach { batch ->
+                batch.forEach { mapping ->
+                    launch {
+                        try {
+                            val box = client.getPoolBox(mapping.pid, _uiState.value.includeUnconfirmed)
+                            if (box == null) {
+                                updateLiquidityInState(mapping.pid, "Pool not found")
+                                return@launch
                             }
-                        } else {
-                            "${String.format("%.2f", erg / 1_000_000_000.0)} ERG"
+                            val assets = box["assets"] as? List<Map<String, Any>> ?: emptyList()
+                            val erg = (box["value"] as? Number)?.toLong() ?: 0L
+                            
+                            val liqStr = if (assets.size >= 3) {
+                                if (!mapping.data.containsKey("id_in")) {
+                                    // ERG to Token
+                                    val tokenId = mapping.data["id"] as? String ?: ""
+                                    val decimals = tokenRepository.getTokenDecimals(tokenId)
+                                    val tokenAmt = (assets[2]["amount"] as? Number)?.toLong() ?: 0L
+                                    val formattedErg = String.format("%.2f", erg / 1_000_000_000.0)
+                                    val formattedToken = if (decimals > 0) {
+                                        String.format("%.2f", tokenAmt / Math.pow(10.0, decimals.toDouble()))
+                                    } else {
+                                        tokenAmt.toString()
+                                    }
+                                    "$formattedErg ERG / $formattedToken ${mapping.name}"
+                                } else {
+                                    // Token to Token
+                                    if (assets.size >= 4) {
+                                        val t1Id = mapping.data["id_in"] as? String ?: ""
+                                        val t2Id = mapping.data["id_out"] as? String ?: ""
+                                        val t1Name = getTokenName(t1Id)
+                                        val t2Name = getTokenName(t2Id)
+                                        val d1 = tokenRepository.getTokenDecimals(t1Id)
+                                        val d2 = tokenRepository.getTokenDecimals(t2Id)
+                                        val a1 = (assets[2]["amount"] as? Number)?.toLong() ?: 0L
+                                        val a2 = (assets[3]["amount"] as? Number)?.toLong() ?: 0L
+                                        
+                                        val f1 = if (d1 > 0) String.format("%.2f", a1 / Math.pow(10.0, d1.toDouble())) else a1.toString()
+                                        val f2 = if (d2 > 0) String.format("%.2f", a2 / Math.pow(10.0, d2.toDouble())) else a2.toString()
+                                        
+                                        "$f1 $t1Name / $f2 $t2Name"
+                                    } else {
+                                        "${String.format("%.2f", erg / 1_000_000_000.0)} ERG"
+                                    }
+                                }
+                            } else {
+                                "${String.format("%.2f", erg / 1_000_000_000.0)} ERG"
+                            }
+                            
+                            updateLiquidityInState(mapping.pid, liqStr)
+                        } catch (e: Exception) {
+                            Log.e("SwapViewModel", "Error fetching mapping box ${mapping.pid}: ${e.message}")
                         }
-                        
-                        updateLiquidityInState(mapping.pid, liqStr)
-                    } catch (e: Exception) {
-                        Log.e("SwapViewModel", "Error fetching mapping box ${mapping.pid}: ${e.message}")
                     }
                 }
+                // Small delay between batches to keep node connections healthy
+                kotlinx.coroutines.delay(100)
             }
         }
     }
@@ -1377,6 +1397,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 
                 loadPoolMappings(fetchLiquidity = false)
+                initializeNodeClient() // Refresh trader with new token names/keys
                 fetchWalletBalances() // Refresh balances for newly whitelisted token
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save whitelist change", e)

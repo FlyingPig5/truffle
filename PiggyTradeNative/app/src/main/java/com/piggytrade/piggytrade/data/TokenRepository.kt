@@ -258,9 +258,23 @@ class TokenRepository(private val context: Context) {
         } catch (e: Exception) { emptySet() }
 
         val newTokensAdded = mutableListOf<String>()
-        // Only save DISCOVERED tokens (not in official assets) to the files
+        // Initialize with existing synced tokens to avoid flushing them if sync doesn't see them this time
         val finalErgToToken = mutableMapOf<String, Map<String, Any>>()
         val finalTokenToToken = mutableMapOf<String, Map<String, Any>>()
+
+        // Try to load existing local discovery data first so we don't lose them
+        try {
+            if (ergToTokenFile.exists()) {
+                val type = object : TypeToken<Map<String, Map<String, Any>>>() {}.type
+                val existing: Map<String, Map<String, Any>> = gson.fromJson(ergToTokenFile.readText(), type) ?: emptyMap()
+                finalErgToToken.putAll(existing)
+            }
+            if (tokenToTokenFile.exists()) {
+                val type = object : TypeToken<Map<String, Map<String, Any>>>() {}.type
+                val existing: Map<String, Map<String, Any>> = gson.fromJson(tokenToTokenFile.readText(), type) ?: emptyMap()
+                finalTokenToToken.putAll(existing)
+            }
+        } catch (e: Exception) {}
         
         val officialPids = systemWhitelistPids
         val officialNameMap = systemWhitelistNameMap
@@ -285,45 +299,72 @@ class TokenRepository(private val context: Context) {
                 data["name"] = entryName
                 
                 val currentErg = (boxMap["value"] as? Number)?.toLong() ?: 0L
-                val existing = finalErgToToken[entryName]
-                val wasVerified = existing != null && ((existing["official"] as? Boolean ?: false) || (existing["whitelisted"] as? Boolean ?: false))
-                val isVerified = officialPids.contains(pid) || isPidWhitelisted(pid)
-                
-                val bestSoFar = bestErgLiquidity[entryName] ?: 0L
-                
-                val isBetter = when {
-                    existing == null -> true
-                    officialPids.contains(pid) && !(existing["official"] as? Boolean ?: false) -> true
-                    isVerified && !wasVerified -> true
-                    !isVerified && wasVerified -> false
-                    else -> currentErg > bestSoFar
-                }
+                val isOfficial = officialPids.contains(pid)
+                val mustUseSuffix = !isOfficial && assetKnownNames.contains(entryName)
 
-                if (isBetter) {
-                    bestErgLiquidity[entryName] = currentErg
-                    data["official"] = officialPids.contains(pid)
+                // If it must use a suffix (official asset duplicate), it doesn't compete for the clean name.
+                if (mustUseSuffix) {
+                    val suffixedName = "$entryName (${pid.take(4)})"
+                    data["official"] = false
                     data["user_added"] = customWhitelistPids.contains(pid)
                     data["whitelisted"] = isPidWhitelisted(pid)
-                    data["name"] = entryName
+                    data["name"] = suffixedName
+                    
+                    if (!currentKnownPids.contains(pid)) {
+                        newTokensAdded.add(suffixedName)
+                        currentKnownPids.add(pid)
+                    }
+                    finalErgToToken[suffixedName] = data
+                } else {
+                    // Compete for the clean name slot (Champion logic)
+                    val existing = finalErgToToken[entryName]
+                    val wasOfficial = existing != null && (existing["official"] as? Boolean ?: false)
+                    val bestSoFar = bestErgLiquidity[entryName] ?: 0L
 
-                    if (!officialPids.contains(pid)) {
-                        val finalDiscoveryName = if (assetKnownNames.contains(entryName)) {
-                            "$entryName (${pid.take(4)})"
-                        } else {
-                            entryName
+                    val isBetter = when {
+                        existing == null -> true
+                        isOfficial && !wasOfficial -> true
+                        !isOfficial && wasOfficial -> false
+                        else -> currentErg > bestSoFar
+                    }
+
+                    if (isBetter) {
+                        // If replacing an existing non-official champion, move the old one to a suffixed slot
+                        if (existing != null && !wasOfficial) {
+                            val oldPid = existing["pid"] as? String ?: ""
+                            val oldName = existing["name"] as? String ?: ""
+                            // Avoid double suffixing
+                            val oldFinalName = if (oldName.contains(" (")) oldName else "$oldName (${oldPid.take(4)})"
+                            finalErgToToken[oldFinalName] = existing
                         }
-                        data["name"] = finalDiscoveryName
+
+                        data["official"] = isOfficial
+                        data["user_added"] = customWhitelistPids.contains(pid)
+                        data["whitelisted"] = isPidWhitelisted(pid)
+                        
+                        val finalName = if (isOfficial) (officialNameMap[pid] ?: entryName) else entryName
+                        data["name"] = finalName
                         
                         if (!currentKnownPids.contains(pid)) {
-                            newTokensAdded.add(finalDiscoveryName)
+                            newTokensAdded.add(finalName)
                             currentKnownPids.add(pid)
                         }
-                        finalErgToToken[finalDiscoveryName] = data
+                        
+                        finalErgToToken[entryName] = data
+                        bestErgLiquidity[entryName] = currentErg
                     } else {
-                        // Official token found
-                        val officialName = if (entryName.isNotEmpty()) entryName else (officialNameMap[pid] ?: "Unlabeled")
-                        data["name"] = officialName
-                        finalErgToToken[officialName] = data
+                        // Not the champion. Store with suffix.
+                        val suffixedName = "$entryName (${pid.take(4)})"
+                        data["official"] = isOfficial
+                        data["user_added"] = customWhitelistPids.contains(pid)
+                        data["whitelisted"] = isPidWhitelisted(pid)
+                        data["name"] = suffixedName
+                        
+                        if (!currentKnownPids.contains(pid)) {
+                            newTokensAdded.add(suffixedName)
+                            currentKnownPids.add(pid)
+                        }
+                        finalErgToToken[suffixedName] = data
                     }
                 }
             } else {
@@ -342,46 +383,69 @@ class TokenRepository(private val context: Context) {
                 data["name_out"] = nameOut
                 
                 val currentLiquidity = if (assets.size >= 3) (assets[2]["amount"] as? Number)?.toLong() ?: 0L else 0L
-                val existing = finalTokenToToken[entryName]
-                val wasVerified = existing != null && ((existing["official"] as? Boolean ?: false) || (existing["whitelisted"] as? Boolean ?: false))
                 val isVerified = officialPids.contains(pid) || isPidWhitelisted(pid)
+                val isOfficial = officialPids.contains(pid)
+                val mustUseSuffix = !isOfficial && assetKnownNames.contains(entryName)
 
-                val bestSoFar = bestTokenLiquidity[entryName] ?: 0L
+                if (mustUseSuffix) {
+                    val suffixedName = "$entryName (${pid.take(4)})"
+                    data["official"] = false
+                    data["user_added"] = customWhitelistPids.contains(pid)
+                    data["whitelisted"] = isPidWhitelisted(pid)
+                    data["name"] = suffixedName
+                    
+                    if (!currentKnownPids.contains(pid)) {
+                        newTokensAdded.add(suffixedName)
+                        currentKnownPids.add(pid)
+                    }
+                    finalTokenToToken[suffixedName] = data
+                } else {
+                    // Champion logic for T2T
+                    val existing = finalTokenToToken[entryName]
+                    val wasOfficial = existing != null && (existing["official"] as? Boolean ?: false)
+                    val bestSoFar = bestTokenLiquidity[entryName] ?: 0L
 
-                val isBetter = when {
-                    existing == null -> true
-                    officialPids.contains(pid) && !(existing["official"] as? Boolean ?: false) -> true
-                    isVerified && !wasVerified -> true
-                    !isVerified && wasVerified -> false
-                    else -> currentLiquidity > bestSoFar
-                }
+                    val isBetter = when {
+                        existing == null -> true
+                        isOfficial && !wasOfficial -> true
+                        !isOfficial && wasOfficial -> false
+                        else -> currentLiquidity > bestSoFar
+                    }
 
-                if (isBetter) {
-                        bestTokenLiquidity[entryName] = currentLiquidity
-                        data["official"] = officialPids.contains(pid)
+                    if (isBetter) {
+                        if (existing != null && !wasOfficial) {
+                            val oldPid = existing["pid"] as? String ?: ""
+                            val oldName = existing["name"] as? String ?: ""
+                            val oldFinalName = if (oldName.contains(" (")) oldName else "$oldName (${oldPid.take(4)})"
+                            finalTokenToToken[oldFinalName] = existing
+                        }
+
+                        data["official"] = isOfficial
                         data["user_added"] = customWhitelistPids.contains(pid)
                         data["whitelisted"] = isPidWhitelisted(pid)
-
-                        if (!officialPids.contains(pid)) {
-                            val finalDiscoveryName = if (assetKnownNames.contains(entryName)) {
-                                "$entryName (${pid.take(4)})"
-                            } else {
-                                entryName
-                            }
-                            data["name"] = finalDiscoveryName
-
-                            if (!currentKnownPids.contains(pid)) {
-                                newTokensAdded.add(finalDiscoveryName)
-                                currentKnownPids.add(pid)
-                            }
-                            finalTokenToToken[finalDiscoveryName] = data
-                        } else {
-                            // Official token found - store it using on-chain metadata
-                            val officialName = if (entryName.isNotEmpty()) entryName else (officialNameMap[pid] ?: "Unlabeled")
-                            data["name"] = officialName
-                            finalTokenToToken[officialName] = data
+                        data["name"] = entryName
+                        
+                        if (!currentKnownPids.contains(pid)) {
+                            newTokensAdded.add(entryName)
+                            currentKnownPids.add(pid)
                         }
+                        
+                        finalTokenToToken[entryName] = data
+                        bestTokenLiquidity[entryName] = currentLiquidity
+                    } else {
+                        val suffixedName = "$entryName (${pid.take(4)})"
+                        data["official"] = isOfficial
+                        data["user_added"] = customWhitelistPids.contains(pid)
+                        data["whitelisted"] = isPidWhitelisted(pid)
+                        data["name"] = suffixedName
+
+                        if (!currentKnownPids.contains(pid)) {
+                            newTokensAdded.add(suffixedName)
+                            currentKnownPids.add(pid)
+                        }
+                        finalTokenToToken[suffixedName] = data
                     }
+                }
             }
             onProgress(index + 1, total, newTokensAdded.toList(), "Analysing box ${index + 1} of $total")
         }
@@ -458,7 +522,30 @@ class TokenRepository(private val context: Context) {
         addSynced(syncedErgToToken)
         addSynced(syncedTokenToToken)
 
-        // 2. Inject specialized hardcoded tokens
+        // 2. Inject official assets from tokens.json as baseline
+        try {
+            val inputStream = context.assets.open("tokens.json")
+            val typeObj = object : TypeToken<Map<String, Map<String, Any>>>() {}.type
+            val assetMap: Map<String, Map<String, Any>> = gson.fromJson(InputStreamReader(inputStream), typeObj) ?: emptyMap()
+            assetMap.forEach { (key, data) ->
+                val pid = data["pid"] as? String ?: ""
+                val normalizedKey = normalizeTokenName(key)
+                
+                // Only add if not already present or if the existing one isn't official
+                val existing = combined[normalizedKey]
+                if (existing == null || !(existing["official"] as? Boolean ?: false)) {
+                    val mut = data.toMutableMap()
+                    mut["official"] = true
+                    mut["whitelisted"] = true
+                    mut["name"] = normalizedKey
+                    combined[normalizedKey] = mut
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("TokenRepo", "Error injecting tokens.json: ${e.message}")
+        }
+
+        // 3. Inject specialized hardcoded tokens
         val useCfg = com.piggytrade.piggytrade.protocol.NetworkConfig.USE_CONFIG
         combined["USE"] = useCfg.toMutableMap().apply {
             put("official", true)

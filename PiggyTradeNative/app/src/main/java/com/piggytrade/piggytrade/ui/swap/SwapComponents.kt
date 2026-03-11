@@ -307,7 +307,7 @@ fun OrderDetailsPanel(uiState: SwapState, viewModel: SwapViewModel) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(text = "App Fee:", color = ColorTextDim, fontSize = 11.sp)
                     Text(
-                        text = "${String.format("%.5f", uiState.serviceFee)} ERG",
+                        text = "${SwapViewModel.formatErg(uiState.serviceFee)} ERG",
                         color = Color.White,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
@@ -321,7 +321,7 @@ fun OrderDetailsPanel(uiState: SwapState, viewModel: SwapViewModel) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(text = "Miner Fee:", color = ColorTextDim, fontSize = 11.sp)
                 Text(
-                    text = "${String.format("%.5f", uiState.minerFee)} ERG",
+                    text = "${SwapViewModel.formatErg(uiState.minerFee)} ERG",
                     color = ColorAccent,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold

@@ -52,7 +52,14 @@ fun ManagePairsScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
 
     LaunchedEffect(Unit) {
-        viewModel.loadPoolMappings(fetchLiquidity = true)
+        val syncing = uiState.syncProgress != null && !uiState.syncProgress!!.isFinished
+        if (!syncing) {
+            viewModel.loadPoolMappings(fetchLiquidity = true)
+        }
+    }
+
+    if (uiState.syncProgress != null) {
+        SyncProgressPopup(uiState.syncProgress!!, onDismiss = { viewModel.dismissSyncPopup() })
     }
 
     Box(modifier = Modifier.fillMaxSize().background(ColorBg)) {
@@ -78,39 +85,17 @@ fun ManagePairsScreen(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(start = 10.dp).weight(1f)
                 )
+            }
 
-                // Reset Button
-                var showResetDialog by remember { mutableStateOf(false) }
-                TogaIconButton(
-                    icon = "\uE872", // DELETE/TRASH
-                    onClick = { showResetDialog = true },
-                    modifier = Modifier.size(36.dp).padding(end = 8.dp),
-                    radius = 10.dp,
-                    bgColor = ColorDanger
-                )
-
-                if (showResetDialog) {
-                    AlertDialog(
-                        onDismissRequest = { showResetDialog = false },
-                        title = { Text("Reset Token Data?") },
-                        text = { Text("This will erase all custom whitelisted pairs and downloaded token metadata. The app will revert to the default official token list.") },
-                        confirmButton = {
-                            TextButton(onClick = {
-                                viewModel.resetTokenData()
-                                showResetDialog = false
-                            }) {
-                                Text("Reset All", color = ColorDanger)
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { showResetDialog = false }) {
-                                Text("Cancel")
-                            }
-                        }
-                    )
-                }
-                
-                // Filter Tabs
+            // Sub-header with centered filters and right-aligned reset
+            var showResetDialog by remember { mutableStateOf(false) }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                // Centered Filters
                 Row(
                     modifier = Modifier
                         .background(ColorInputBg, RoundedCornerShape(10.dp))
@@ -134,6 +119,38 @@ fun ManagePairsScreen(
                             )
                         }
                     }
+                }
+
+                // Right-aligned Reset Button
+                TogaIconButton(
+                    icon = "\uE872", // DELETE/TRASH
+                    onClick = { showResetDialog = true },
+                    modifier = Modifier
+                        .size(36.dp)
+                        .align(Alignment.CenterEnd),
+                    radius = 10.dp,
+                    bgColor = ColorDanger
+                )
+
+                if (showResetDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showResetDialog = false },
+                        title = { Text("Reset Token Data?") },
+                        text = { Text("This will erase all custom whitelisted pairs and downloaded token metadata. The app will revert to the default official token list.") },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                viewModel.resetTokenData()
+                                showResetDialog = false
+                            }) {
+                                Text("Reset All", color = ColorDanger)
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showResetDialog = false }) {
+                                Text("Cancel")
+                            }
+                        }
+                    )
                 }
             }
 

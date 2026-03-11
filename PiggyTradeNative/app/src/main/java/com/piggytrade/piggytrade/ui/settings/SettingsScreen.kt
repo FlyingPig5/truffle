@@ -131,7 +131,7 @@ fun SettingsScreen(
                     modifier = Modifier.padding(bottom = 10.dp)
                 ) {
                     Image(
-                        painter = painterResource(id = R.drawable.logo),
+                        painter = painterResource(id = R.drawable.logo_settings_screen_header),
                         contentDescription = "Large Logo",
                         modifier = Modifier
                             .size(110.dp)
@@ -178,7 +178,7 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.width(6.dp))
 
                         Image(
-                            painter = painterResource(id = R.drawable.github),
+                            painter = painterResource(id = R.drawable.ic_github_logo_settings_footer),
                             contentDescription = "GitHub",
                             modifier = Modifier
                                 .size(18.dp)
