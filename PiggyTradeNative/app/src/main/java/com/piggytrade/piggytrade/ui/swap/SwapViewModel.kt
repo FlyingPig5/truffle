@@ -4,6 +4,9 @@ import com.piggytrade.piggytrade.ui.common.*
 import com.piggytrade.piggytrade.ui.home.*
 import com.piggytrade.piggytrade.ui.wallet.*
 import com.piggytrade.piggytrade.ui.settings.*
+import com.piggytrade.piggytrade.stablecoin.EligibilityResult
+import com.piggytrade.piggytrade.stablecoin.MintQuote
+import com.piggytrade.piggytrade.stablecoin.StablecoinRegistry
 
 import android.app.Application
 import android.util.Base64
@@ -78,7 +81,15 @@ data class SwapState(
     val nodeUrl: String = "",
     val isToAssetFavorite: Boolean = false,
     val serviceFee: Double = 0.0,
-    val activeTab: String = "dex" // "dex", "wallet"
+    val activeTab: String = "dex", // "dex", "wallet", "bank"
+
+    // ─── BANK STATE (Protocol-Agnostic) ──────────────────────────────────────
+    val activeProtocolId: String = "",
+    val bankAmount: String = "",
+    val bankQuote: MintQuote? = null,
+    val bankEligibility: EligibilityResult? = null,
+    val isBankLoading: Boolean = false,
+    val bankError: String? = null
 )
 
 data class PoolMapping(
@@ -446,6 +457,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         fetchQuote() // Refresh quote as mempool status affects liquidity
     }
 
+
     fun setSelectedNodeIndex(index: Int) {
         _uiState.value = _uiState.value.copy(selectedNodeIndex = index)
         updateNodeClient()
@@ -690,6 +702,155 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setActiveTab(tab: String) {
         _uiState.value = _uiState.value.copy(activeTab = tab)
+        if (tab == "bank") {
+            // Auto-select first registered protocol and refresh eligibility
+            val protocols = StablecoinRegistry.getAll()
+            val current = _uiState.value
+            val protocolId = if (current.activeProtocolId.isEmpty()) protocols.firstOrNull()?.id ?: "" else current.activeProtocolId
+            if (current.activeProtocolId.isEmpty() && protocolId.isNotEmpty()) {
+                _uiState.value = _uiState.value.copy(activeProtocolId = protocolId)
+            }
+            refreshBankEligibility()
+        }
+    }
+
+    fun setBankProtocol(protocolId: String) {
+        _uiState.value = _uiState.value.copy(
+            activeProtocolId = protocolId,
+            bankAmount = "",
+            bankQuote = null,
+            bankEligibility = null,
+            bankError = null
+        )
+        refreshBankEligibility()
+    }
+
+    fun setBankAmount(amount: String) {
+        _uiState.value = _uiState.value.copy(bankAmount = amount, bankQuote = null)
+        val parsed = amount.replace(",", ".").toDoubleOrNull() ?: 0.0
+        if (parsed > 0.0) fetchBankQuote(parsed)
+    }
+
+    private var bankQuoteJob: kotlinx.coroutines.Job? = null
+
+    private fun fetchBankQuote(amount: Double) {
+        bankQuoteJob?.cancel()
+        bankQuoteJob = viewModelScope.launch(Dispatchers.IO) {
+            val protocol = StablecoinRegistry.getById(_uiState.value.activeProtocolId) ?: return@launch
+            val client = nodeClient ?: return@launch
+            try {
+                val quote = protocol.getQuote(client, amount, _uiState.value.selectedAddress, _uiState.value.includeUnconfirmed)
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(bankQuote = quote, bankError = null)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(bankError = e.message)
+                }
+            }
+        }
+    }
+
+    private fun refreshBankEligibility() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val protocol = StablecoinRegistry.getById(_uiState.value.activeProtocolId) ?: return@launch
+            val client = nodeClient ?: return@launch
+            withContext(Dispatchers.Main) {
+                _uiState.value = _uiState.value.copy(isBankLoading = true, bankError = null)
+            }
+            try {
+                val eligibility = protocol.checkEligibility(client, _uiState.value.selectedAddress, _uiState.value.includeUnconfirmed)
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(bankEligibility = eligibility, isBankLoading = false)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(isBankLoading = false, bankError = e.message)
+                }
+            }
+        }
+    }
+
+    fun buildMintTransaction(onReady: () -> Unit) {
+        val state = _uiState.value
+        val protocol = StablecoinRegistry.getById(state.activeProtocolId) ?: return
+        val client = nodeClient ?: return
+        val amount = state.bankAmount.replace(",", ".").toDoubleOrNull() ?: return
+        val address = state.selectedAddress
+        if (address.isEmpty()) return
+
+        _uiState.value = state.copy(isBuildingTx = true, bankError = null)
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val miningFeeNano = (state.minerFee * 1_000_000_000.0).toLong()
+                val txDict = protocol.buildTransaction(client, amount, address, miningFeeNano, state.includeUnconfirmed)
+
+                // Detect wallet type — same logic as DEX swap
+                val isErgopayWallet = state.selectedWallet.contains("ergopay", ignoreCase = true) ||
+                        state.selectedWallet.isEmpty()
+
+                // Generate unsigned TX JSON via node
+                val signer = com.piggytrade.piggytrade.blockchain.ErgoSigner(address)
+                val txJson = signer.toUnsignedJson(txDict, address)
+
+                // Post-process (e.g. buyback extension injection)
+                val unsignedMap = try {
+                    @Suppress("UNCHECKED_CAST")
+                    org.json.JSONObject(txJson).let { root ->
+                        val tx = root.optJSONObject("tx") ?: root
+                        tx.keys().asSequence().associateWith { tx.get(it) }.toMutableMap()
+                    }
+                } catch (e: Exception) { mutableMapOf<String, Any>() }
+
+                val processedTx = protocol.postProcessUnsignedTx(unsignedMap)
+                val finalJson = if (processedTx.isNotEmpty()) {
+                    org.json.JSONObject(processedTx).toString()
+                } else txJson
+
+                // For ErgoPay wallets, generate the reduced tx URL
+                var ergopayUrl = ""
+                if (isErgopayWallet) {
+                    try {
+                        val headers = client.api.getLastHeaders(10)
+                        val headersJson = com.google.gson.Gson().toJson(headers)
+                        ergopayUrl = signer.reduceTxForErgopay(txDict, address, headersJson)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "ErgoPay URL generation failed for mint: ${e.message}", e)
+                        throw Exception("ErgoPay generation failed: ${e.message}")
+                    }
+                }
+
+                // Build ReviewParams from the quote
+                val quote = state.bankQuote
+                val reviewParams = ReviewParams(
+                    buyAmount = "%.${protocol.mintTokenDecimals}f".format(amount),
+                    buyToken = protocol.mintTokenName,
+                    payAmount = "%.6f".format((quote?.ergCost ?: 0L).toDouble() / 1_000_000_000.0),
+                    payToken = "ERG",
+                    minerFee = state.minerFee,
+                    serviceFee = (quote?.feeBreakdown?.firstOrNull { it.first.contains("App") }?.second ?: 0L).toDouble() / 1_000_000_000.0,
+                    isSimulation = state.isSimulation,
+                    isErgopay = isErgopayWallet,
+                    ergopayUrl = ergopayUrl
+                )
+
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(
+                        isBuildingTx = false,
+                        preparedTxData = txDict,
+                        unsignedTxJson = finalJson,
+                        reviewParams = reviewParams
+                    )
+                    onReady()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "buildMintTransaction failed: ${e.message}", e)
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(isBuildingTx = false, bankError = e.message)
+                }
+            }
+        }
     }
 
     fun getWalletData(name: String): Map<String, Any>? {
@@ -791,7 +952,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                             0.0
                         }
                         val signer = com.piggytrade.piggytrade.blockchain.ErgoSigner("")
-                        val sFee = signer.getNodeConfigP2(ergValueForFee.toLong()).toDouble() / 1_000_000_000.0
+                        val sFee = signer.resolveUtxoGap(ergValueForFee.toLong()).toDouble() / 1_000_000_000.0
 
                         withContext(kotlinx.coroutines.Dispatchers.Main) {
                             _uiState.value = _uiState.value.copy(
@@ -984,8 +1145,8 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                         val headersJson = com.google.gson.Gson().toJson(headers)
                         ergopayUrl = signer.reduceTxForErgopay(txDict, addr, headersJson)
                     } catch (e: Exception) {
-                        android.util.Log.e(TAG, "ErgoPay URL generation failed: ${e.message}")
-                        ergopayUrl = signer.reduceTxForErgopayLegacy(txDict, addr)
+                        android.util.Log.e(TAG, "ErgoPay URL generation failed: ${e.message}", e)
+                        throw Exception("ErgoPay generation failed: ${e.message}")
                     }
                 }
 

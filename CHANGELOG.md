@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.0
+### Enhancements
+- **Bank UI Overhaul**: Redesigned the Bank (Stablecoins) screen with a cleaner layout — user enters desired mint amount first, with cost summary below.
+- **Experimental Banner**: Added a red warning banner at the top of the Bank screen reminding users to validate output values.
+- **Token Logos**: USE and ERG logos now display from asset files in the mint input panel and cost summary, replacing plain text badges.
+- **Smart Cost Summary**: Replaced the swap-style dual-panel layout with a clean informational cost breakdown (total cost, fee lines, mining fee, wallet balance).
+- **Insufficient Balance Warning**: Cost summary now highlights in red when wallet balance is insufficient, with an explicit warning message.
+- **Smart ERG Formatting**: ERG values now strip trailing zeros while maintaining at least 3 decimal places (e.g., `0.002` instead of `0.002000`).
+- **Oracle Price Display**: Protocol status now shows prices as "USE / ERG" (how many USE per 1 ERG) instead of raw nanoERG values.
+- **LP Price Fix**: Fixed arbmint LP price display — was showing raw nanoERG per unit (~3,123,193), now correctly shows human-readable USE/ERG rate.
+- **Cycle Reset Label**: Arbmint delay field renamed from "Delay (X / Y blocks)" to "Cycle reset" for clarity.
+- **Bank Nav Icon**: Bottom navigation bar icon for Stablecoins updated to a bank icon (`\uE84F`).
+- **Check Tx Mode**: Added a "Check Tx" toggle under Settings → Advanced that enables simulation mode — transactions are validated by the node but not broadcast to the network.
+
+### Bug Fixes
+- **Oracle Price Calculation**: Fixed a 1000x error in oracle price display caused by an unnecessary division by `USE_DECIMALS` before conversion.
+- **Order Details Font**: Increased total cost font size in the collapsible Order Details panel for better readability.
+
 ## 0.8.0
 ### Enhancements
 - **PID-Centric Logic**: Successfully migrated all trading and whitelisting logic to use unique Pool IDs (PIDs) as the primary identifier, enabling robust support for multiple pools of the same asset.

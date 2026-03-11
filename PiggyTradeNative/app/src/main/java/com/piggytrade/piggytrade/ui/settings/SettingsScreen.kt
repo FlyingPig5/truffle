@@ -332,6 +332,45 @@ fun SettingsScreen(
 
 
             if (uiState.debugMode) {
+
+                // ── Check Tx Mode ─────────────────────────────────────────────
+                Text(
+                    text = "TRANSACTION VALIDATION",
+                    color = ColorText,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 20.dp, bottom = 5.dp, start = 10.dp)
+                )
+
+                TogaRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 10.dp, end = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Check Tx",
+                        color = ColorText,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(
+                        checked = uiState.isSimulation,
+                        onCheckedChange = { viewModel.setSimulationMode(it) },
+                        modifier = Modifier.scale(0.8f)
+                    )
+                }
+
+                Text(
+                    text = "When enabled, signed transactions are submitted to the node for validation only — " +
+                           "the node will verify all scripts and balances, but the transaction will NOT be broadcast " +
+                           "to the network or executed on-chain.",
+                    color = ColorTextDim,
+                    fontSize = 10.sp,
+                    modifier = Modifier.padding(start = 14.dp, end = 14.dp).padding(bottom = 10.dp)
+                )
+
                 // Token Management Section
                 Text(
                     text = "TOKEN LIST MANAGEMENT",

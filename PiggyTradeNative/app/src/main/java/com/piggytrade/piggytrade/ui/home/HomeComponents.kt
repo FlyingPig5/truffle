@@ -111,6 +111,30 @@ fun BottomMenuBar(
             )
         }
 
+        // BANK Tab
+        Column(
+            modifier = Modifier
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { onTabClick("bank") }
+                ),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "\uE84F", // bank icon
+                fontFamily = MaterialDesignIcons,
+                fontSize = 28.sp,
+                color = if (activeTab == "bank") Color.White else ColorTextDim
+            )
+            Text(
+                text = "Stablecoins",
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (activeTab == "bank") Color.White else ColorTextDim
+            )
+        }
+
         // Wallet Tab
         Column(
             modifier = Modifier

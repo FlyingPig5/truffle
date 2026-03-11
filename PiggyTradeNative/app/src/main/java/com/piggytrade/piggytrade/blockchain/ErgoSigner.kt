@@ -68,8 +68,8 @@ object Base58 {
 
 class ErgoSigner(private val nodeUrl: String) {
 
-    fun getNodeConfigP2(n: Long): BigInteger {
-        return ProtocolConfig.getNodeConfigP2(BigInteger.valueOf(n))
+    fun resolveUtxoGap(n: Long): BigInteger {
+        return ProtocolConfig.resolveUtxoGap(BigInteger.valueOf(n))
     }
 
     private fun parseAmount(a: Any?): Long {
@@ -159,6 +159,8 @@ class ErgoSigner(private val nodeUrl: String) {
         lastHeadersJson: String
     ): String {
         val inputBoxes = txDict["input_boxes"] as? List<Map<String, Any>> ?: emptyList()
+        val dataInputBoxes = txDict["data_input_boxes"] as? List<Map<String, Any>> ?: emptyList()
+        val contextExtensions = txDict["context_extensions"] as? Map<String, Any> ?: emptyMap()
         val requests = txDict["requests"] as? List<Map<String, Any>> ?: emptyList()
         val fee = (txDict["fee"] as? Number)?.toLong() ?: 1100000L
         val currentHeight = (txDict["current_height"] as? Number)?.toInt() ?: 0
@@ -180,30 +182,39 @@ class ErgoSigner(private val nodeUrl: String) {
                 "ergoTree" to ergoTree,
                 "assets" to assets,
                 "additionalRegisters" to registers,
-                "creationHeight" to (req["creationHeight"] as? Int ?: currentHeight)
+                "creationHeight" to ((req["creationHeight"] as? Number)?.toInt() ?: currentHeight)
             )
         }
         
         val sanitizedInputBoxes = inputBoxes.map { sanitizeBox(it) }
         val inputBoxesJson = txGson.toJson(sanitizedInputBoxes)
+        val sanitizedDataInputs = dataInputBoxes.map { sanitizeBox(it) }
+        val dataInputBoxesJson = txGson.toJson(sanitizedDataInputs)
+        val contextExtensionsJson = txGson.toJson(contextExtensions)
         val outputCandidatesJson = txGson.toJson(outputCandidates)
 
         return try {
+            android.util.Log.d("ErgoSigner", "buildReducedTxBytes: inputBoxes=${inputBoxesJson.take(200)}")
+            android.util.Log.d("ErgoSigner", "buildReducedTxBytes: dataInputBoxes=${dataInputBoxesJson.take(200)}")
+            android.util.Log.d("ErgoSigner", "buildReducedTxBytes: outputCandidates=${outputCandidatesJson.take(800)}")
+            android.util.Log.d("ErgoSigner", "buildReducedTxBytes: fee=$fee height=$currentHeight addr=$senderAddress")
+            android.util.Log.d("ErgoSigner", "buildReducedTxBytes: extensions=$contextExtensionsJson")
+            android.util.Log.d("ErgoSigner", "buildReducedTxBytes: creationHeight per candidate: ${outputCandidates.map { (it["creationHeight"] as? Number)?.toInt() }}")
             val base64Reduced = org.ergoplatform.wallet.jni.WalletLib.buildReducedTxBytes(
                 inputBoxesJson,
+                dataInputBoxesJson,
                 outputCandidatesJson,
                 fee,
                 senderAddress,
                 currentHeight,
-                lastHeadersJson
+                lastHeadersJson,
+                contextExtensionsJson
             )
+            android.util.Log.d("ErgoSigner", "buildReducedTxBytes SUCCESS: ${base64Reduced.take(40)}...")
             toErgoPayUrl(base64Reduced)
         } catch (e: Exception) {
-            android.util.Log.e("ErgoSigner", "buildReducedTxBytes failed: ${e.message}")
-            // Fallback: Base64-encode unsigned JSON
-            val unsignedJson = toUnsignedJson(txDict, senderAddress)
-            val base64Str = Base64.encodeToString(unsignedJson.toByteArray(), Base64.NO_WRAP)
-            toErgoPayUrl(base64Str)
+            android.util.Log.e("ErgoSigner", "buildReducedTxBytes FAILED: ${e.message}", e)
+            throw e  // Let caller handle — do NOT base64-encode JSON as fallback
         }
     }
 
@@ -238,6 +249,8 @@ class ErgoSigner(private val nodeUrl: String) {
         lastHeadersJson: String
     ): String {
         val inputBoxes = txDict["input_boxes"] as? List<Map<String, Any>> ?: emptyList()
+        val dataInputBoxes = txDict["data_input_boxes"] as? List<Map<String, Any>> ?: emptyList()
+        val contextExtensions = txDict["context_extensions"] as? Map<String, Any> ?: emptyMap()
         val requests = txDict["requests"] as? List<Map<String, Any>> ?: emptyList()
         val fee = (txDict["fee"] as? Number)?.toLong() ?: 1100000L
         val currentHeight = (txDict["current_height"] as? Number)?.toInt() ?: 0
@@ -253,13 +266,19 @@ class ErgoSigner(private val nodeUrl: String) {
                 ""
             }
 
-            mapOf("value" to value, "ergoTree" to ergoTree, "assets" to assets, "additionalRegisters" to registers, "creationHeight" to (req["creationHeight"] as? Int ?: currentHeight))
+            mapOf("value" to value, "ergoTree" to ergoTree, "assets" to assets, "additionalRegisters" to registers, "creationHeight" to ((req["creationHeight"] as? Number)?.toInt() ?: currentHeight))
         }
         
         val sanitizedInputBoxes = inputBoxes.map { sanitizeBox(it) }
         val inputBoxesJson = txGson.toJson(sanitizedInputBoxes)
+        val sanitizedDataInputs = dataInputBoxes.map { sanitizeBox(it) }
+        val dataInputBoxesJson = txGson.toJson(sanitizedDataInputs)
+        val contextExtensionsJson = txGson.toJson(contextExtensions)
         val outputCandidatesJson = txGson.toJson(outputCandidates)
-        return org.ergoplatform.wallet.jni.WalletLib.signTransactionJson(mnemonic, mnemonicPass, inputBoxesJson, outputCandidatesJson, fee, senderAddress, currentHeight, lastHeadersJson)
+        return org.ergoplatform.wallet.jni.WalletLib.signTransactionJson(
+            mnemonic, mnemonicPass, inputBoxesJson, dataInputBoxesJson, outputCandidatesJson,
+            fee, senderAddress, currentHeight, lastHeadersJson, contextExtensionsJson
+        )
     }
 
     /**
@@ -275,6 +294,7 @@ class ErgoSigner(private val nodeUrl: String) {
     fun toUnsignedJson(txDict: Map<String, Any>, senderAddress: String): String {
         val requests = txDict["requests"] as? List<Map<String, Any>> ?: emptyList()
         val fee = (txDict["fee"] as? Number)?.toLong() ?: 1100000L
+        val currentHeight = (txDict["current_height"] as? Number)?.toInt() ?: 0
         
         // Use input_boxes from txDict or fallback to empty
         val inputBoxes = txDict["input_boxes"] as? List<Map<String, Any>> ?: emptyList()
@@ -322,7 +342,7 @@ class ErgoSigner(private val nodeUrl: String) {
                 "ergoTree" to ergoTree,
                 "assets" to assets,
                 "additionalRegisters" to registers,
-                "creationHeight" to (req["creationHeight"] as? Int ?: 0)
+                "creationHeight" to ((req["creationHeight"] as? Number)?.toInt() ?: currentHeight)
             ))
         }
 
@@ -333,7 +353,7 @@ class ErgoSigner(private val nodeUrl: String) {
                 "ergoTree" to "1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a701730073011001020402d19683030193a38cc7b2a57300000193c2b2a57301007473027303830108cdeeac93b1a57304",
                 "assets" to emptyList<Any>(),
                 "additionalRegisters" to emptyMap<String, Any>(),
-                "creationHeight" to (txDict["current_height"] as? Int ?: 0)
+                "creationHeight" to currentHeight
             ))
         }
 

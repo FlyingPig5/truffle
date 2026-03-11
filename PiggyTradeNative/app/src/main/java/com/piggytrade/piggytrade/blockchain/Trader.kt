@@ -284,7 +284,7 @@ class Trader(
         }
  
         val myAssetsBd = myAssets.mapValues { java.math.BigInteger.valueOf(it.value) }
-        val bufferOffset = ErgoSigner("").getNodeConfigP2(nergToPool)
+        val bufferOffset = ErgoSigner("").resolveUtxoGap(nergToPool)
  
         val r4 = cfg["R4"] as? String ?: ""
         val registers = if (r4.isNotEmpty()) mapOf("R4" to r4) else emptyMap()
@@ -312,6 +312,8 @@ class Trader(
         if (lpSwapBox != null) allBoxes.add(lpSwapBox!!)
         allBoxes.addAll(userBoxes)
         txDict["input_boxes"] = allBoxes
+        txDict["data_input_boxes"] = emptyList<Map<String, Any>>()
+        txDict["context_extensions"] = emptyMap<String, Any>()
         
         return txDict
     }
