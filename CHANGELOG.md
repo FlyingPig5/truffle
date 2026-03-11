@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.0
+## 0.7.0
 ### Enhancements
 - **Bank UI Overhaul**: Redesigned the Bank (Stablecoins) screen with a cleaner layout — user enters desired mint amount first, with cost summary below.
 - **Experimental Banner**: Added a red warning banner at the top of the Bank screen reminding users to validate output values.
@@ -18,7 +18,7 @@
 - **Oracle Price Calculation**: Fixed a 1000x error in oracle price display caused by an unnecessary division by `USE_DECIMALS` before conversion.
 - **Order Details Font**: Increased total cost font size in the collapsible Order Details panel for better readability.
 
-## 0.8.0
+## 0.6.0
 ### Enhancements
 - **PID-Centric Logic**: Successfully migrated all trading and whitelisting logic to use unique Pool IDs (PIDs) as the primary identifier, enabling robust support for multiple pools of the same asset.
 - **Dynamic Pool Renaming**: Users can now rename duplicate pools to avoid confusion (e.g., RSN vs RSN-Alt), with custom names preserved throughout the trading interface.
@@ -34,7 +34,7 @@
 - **Address Resolution**: Improved the history engine to correctly identify "Self" transfers and properly associate inputs/outputs with the active wallet even when address strings are missing from on-chain data.
 
 
-## 0.7.0
+## 0.5.5
 ### Enhancements
 - **On-Chain Authority**: Restructured token whitelisting to use `tokens.json` as a PID registry. The app now pulls all live parameters (fees, decimals, token IDs) directly from the blockchain, ensuring immunity to static configuration errors.
 - **Aesthetic Refinement**: Increased swap screen typography for better readability. Redesigned the Settings UI with a modern, soft-white branding section and integrated social links.
@@ -47,7 +47,7 @@
 - **Discovery Accuracy**: Resolved an issue where official tokens were occasionally reported as "new" during synchronization.
 - **Sync Logic**: Fixed a crash related to unbalanced data structures during deep-scan analyst mode.
 
-## 0.6.0
+## 0.5.1
 ### Enhancements
 - **AMM Accuracy**: Refined Automated Market Maker calculations to align perfectly with the original Python implementation.
 - **Security**: Improved token synchronization priority—the built-in `tokens.json` now acts as a source of truth, overriding cached data to prevent spoofing of official tokens like DexyGold and USE.
