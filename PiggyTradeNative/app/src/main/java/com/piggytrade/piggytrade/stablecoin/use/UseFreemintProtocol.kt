@@ -147,8 +147,18 @@ class UseFreemintProtocol : StablecoinProtocol {
     ): Map<String, Any> {
         val state = fetchProtocolState(client, senderAddress, checkMempool)
         val amountUseInt = (amount * UseConfig.USE_DECIMALS).toLong()
-        val height = client.getHeight()
 
+        // CRITICAL: the node evaluates scripts using its current fullHeight (from /info).
+        // sigma-rust evaluates using PreHeader from lastHeaders[0].height.
+        // These two heights can differ by several blocks! We use the MAX of both
+        // so that R4 = height + 364 is within [nodeHeight+360, nodeHeight+365] for the node,
+        // and we embed _buildHeight in the returned map so the ViewModel can patch the
+        // headers to match, keeping sigma-rust's evaluation consistent.
+        val fullHeight = client.getHeight()
+        val lastHeaders = client.api.getLastHeaders(10)
+        val lastHeaderHeight = (lastHeaders.firstOrNull()?.get("height") as? Number)?.toInt() ?: 0
+        val height = maxOf(fullHeight, lastHeaderHeight)
+        Log.d(TAG, "buildTransaction: fullHeight=$fullHeight, lastHeaders[0]=$lastHeaderHeight, using=$height")
         // ── Pre-flight contract validation ────────────────────────────────────
         // Contract: validRateFreeMint = lpRate * 100 > oracleRate * 98
         val contractOracleRate = state.oracleRate / UseConfig.USE_DECIMALS
@@ -278,7 +288,10 @@ class UseFreemintProtocol : StablecoinProtocol {
             "input_boxes" to inputBoxes,
             "data_input_boxes" to listOf(state.oracleBoxMap, state.lpBoxMap),
             "context_extensions" to mapOf("2" to mapOf("0" to "0402")),
-            "current_height" to height
+            "current_height" to height,
+            // Internal keys (stripped by ViewModel before passing to signer/node):
+            "_buildHeight" to height,
+            "_headersJson" to com.google.gson.Gson().toJson(lastHeaders)
         )
     }
 

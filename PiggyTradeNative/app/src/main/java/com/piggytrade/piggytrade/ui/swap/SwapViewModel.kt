@@ -6,6 +6,7 @@ import com.piggytrade.piggytrade.ui.wallet.*
 import com.piggytrade.piggytrade.ui.settings.*
 import com.piggytrade.piggytrade.stablecoin.EligibilityResult
 import com.piggytrade.piggytrade.stablecoin.MintQuote
+import com.piggytrade.piggytrade.stablecoin.RedeemQuote
 import com.piggytrade.piggytrade.stablecoin.StablecoinRegistry
 
 import android.app.Application
@@ -42,7 +43,7 @@ data class SwapState(
     val lpFee: Double = 0.0,
     val isLoadingQuote: Boolean = false,
     val isSimulation: Boolean = false,
-    val minerFee: Double = 0.001,
+    val minerFee: Double = 0.0011,  // Standard Ergo minimum fee = 1,100,000 nanoErg
     val selectedWallet: String = "",
     val selectedAddress: String = "",
     val walletErgBalance: Double = 0.0,
@@ -87,9 +88,15 @@ data class SwapState(
     val activeProtocolId: String = "",
     val bankAmount: String = "",
     val bankQuote: MintQuote? = null,
+    val bankRedeemQuote: RedeemQuote? = null,
     val bankEligibility: EligibilityResult? = null,
     val isBankLoading: Boolean = false,
-    val bankError: String? = null
+    val bankError: String? = null,
+    val bankMode: String = "mint",  // "mint" or "redeem"
+
+    // Cached block headers captured at TX build time.
+    // CRITICAL: must be used at sign time so sigma-rust HEIGHT == the HEIGHT used to compute R4.
+    val cachedHeadersJson: String = ""
 )
 
 data class PoolMapping(
@@ -720,16 +727,31 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
             activeProtocolId = protocolId,
             bankAmount = "",
             bankQuote = null,
+            bankRedeemQuote = null,
             bankEligibility = null,
-            bankError = null
+            bankError = null,
+            bankMode = "mint"
         )
         refreshBankEligibility()
     }
 
+    fun setBankMode(mode: String) {
+        _uiState.value = _uiState.value.copy(
+            bankMode = mode,
+            bankAmount = "",
+            bankQuote = null,
+            bankRedeemQuote = null,
+            bankError = null
+        )
+    }
+
     fun setBankAmount(amount: String) {
-        _uiState.value = _uiState.value.copy(bankAmount = amount, bankQuote = null)
+        _uiState.value = _uiState.value.copy(bankAmount = amount, bankQuote = null, bankRedeemQuote = null)
         val parsed = amount.replace(",", ".").toDoubleOrNull() ?: 0.0
-        if (parsed > 0.0) fetchBankQuote(parsed)
+        if (parsed > 0.0) {
+            if (_uiState.value.bankMode == "redeem") fetchBankRedeemQuote(parsed)
+            else fetchBankQuote(parsed)
+        }
     }
 
     private var bankQuoteJob: kotlinx.coroutines.Job? = null
@@ -743,6 +765,26 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 val quote = protocol.getQuote(client, amount, _uiState.value.selectedAddress, _uiState.value.includeUnconfirmed)
                 withContext(Dispatchers.Main) {
                     _uiState.value = _uiState.value.copy(bankQuote = quote, bankError = null)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(bankError = e.message)
+                }
+            }
+        }
+    }
+
+    private var bankRedeemQuoteJob: kotlinx.coroutines.Job? = null
+
+    private fun fetchBankRedeemQuote(amount: Double) {
+        bankRedeemQuoteJob?.cancel()
+        bankRedeemQuoteJob = viewModelScope.launch(Dispatchers.IO) {
+            val protocol = StablecoinRegistry.getById(_uiState.value.activeProtocolId) ?: return@launch
+            val client = nodeClient ?: return@launch
+            try {
+                val quote = protocol.getRedeemQuote(client, amount, _uiState.value.selectedAddress, _uiState.value.includeUnconfirmed)
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(bankRedeemQuote = quote, bankError = null)
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -796,7 +838,38 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val miningFeeNano = (state.minerFee * 1_000_000_000.0).toLong()
-                val txDict = protocol.buildTransaction(client, amount, address, miningFeeNano, state.includeUnconfirmed)
+
+                val rawTxDict = protocol.buildTransaction(client, amount, address, miningFeeNano, state.includeUnconfirmed)
+
+                // Extract internal metadata from txDict before stripping
+                val buildHeight = (rawTxDict["_buildHeight"] as? Number)?.toInt() ?: 0
+                val rawHeadersJson = rawTxDict["_headersJson"] as? String
+
+                // Patch headers[0].height to match buildHeight so sigma-rust evaluates
+                // HEIGHT == the height used for R4 calculation. Without this, sigma-rust
+                // uses lastHeaders[0].height which can be behind /info's fullHeight,
+                // causing R4 to be above HEIGHT+365 in sigma-rust's eyes.
+                val buildHeadersJson = if (rawHeadersJson != null && buildHeight > 0) {
+                    try {
+                        val headersArray = com.google.gson.JsonParser.parseString(rawHeadersJson).asJsonArray
+                        val header0 = headersArray.get(0).asJsonObject
+                        val originalHeight = header0.get("height").asInt
+                        if (buildHeight > originalHeight) {
+                            Log.d(TAG, "Patching headers[0].height from $originalHeight to $buildHeight for sigma-rust")
+                            header0.addProperty("height", buildHeight)
+                        }
+                        com.google.gson.Gson().toJson(headersArray)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to patch headers: ${e.message}")
+                        rawHeadersJson
+                    }
+                } else {
+                    Log.w(TAG, "No _headersJson in txDict — falling back to fresh getLastHeaders call")
+                    com.google.gson.Gson().toJson(client.api.getLastHeaders(10))
+                }
+
+                // Strip internal metadata keys before passing txDict downstream
+                val txDict = rawTxDict.filterKeys { !it.startsWith("_") }
 
                 // Detect wallet type — same logic as DEX swap
                 val isErgopayWallet = state.selectedWallet.contains("ergopay", ignoreCase = true) ||
@@ -824,9 +897,8 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 var ergopayUrl = ""
                 if (isErgopayWallet) {
                     try {
-                        val headers = client.api.getLastHeaders(10)
-                        val headersJson = com.google.gson.Gson().toJson(headers)
-                        ergopayUrl = signer.reduceTxForErgopay(txDict, address, headersJson)
+                        // Use the same patched headers (buildHeadersJson) for consistency
+                        ergopayUrl = signer.reduceTxForErgopay(txDict, address, buildHeadersJson)
                     } catch (e: Exception) {
                         Log.e(TAG, "ErgoPay URL generation failed for mint: ${e.message}", e)
                         throw Exception("ErgoPay generation failed: ${e.message}")
@@ -852,12 +924,94 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                         isBuildingTx = false,
                         preparedTxData = txDict,
                         unsignedTxJson = finalJson,
-                        reviewParams = reviewParams
+                        reviewParams = reviewParams,
+                        cachedHeadersJson = buildHeadersJson
                     )
                     onReady()
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "buildMintTransaction failed: ${e.message}", e)
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(isBuildingTx = false, bankError = e.message)
+                }
+            }
+        }
+    }
+
+    fun buildRedeemTransaction(onReady: () -> Unit) {
+        val state = _uiState.value
+        val protocol = StablecoinRegistry.getById(state.activeProtocolId) ?: return
+        val client = nodeClient ?: return
+        val amount = state.bankAmount.replace(",", ".").toDoubleOrNull() ?: return
+        val address = state.selectedAddress
+        if (address.isEmpty()) return
+
+        _uiState.value = state.copy(isBuildingTx = true, bankError = null)
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val miningFeeNano = (state.minerFee * 1_000_000_000.0).toLong()
+
+                // Fetch headers at build time (same reason as buildMintTransaction)
+                val buildHeaders = client.api.getLastHeaders(10)
+                val buildHeadersJson = com.google.gson.Gson().toJson(buildHeaders)
+
+                val txDict = protocol.buildRedeemTransaction(client, amount, address, miningFeeNano, state.includeUnconfirmed)
+
+                val isErgopayWallet = state.selectedWallet.contains("ergopay", ignoreCase = true) ||
+                        state.selectedWallet.isEmpty()
+
+                val signer = com.piggytrade.piggytrade.blockchain.ErgoSigner(address)
+                val txJson = signer.toUnsignedJson(txDict, address)
+
+                val unsignedMap = try {
+                    @Suppress("UNCHECKED_CAST")
+                    org.json.JSONObject(txJson).let { root ->
+                        val tx = root.optJSONObject("tx") ?: root
+                        tx.keys().asSequence().associateWith { tx.get(it) }.toMutableMap()
+                    }
+                } catch (e: Exception) { mutableMapOf<String, Any>() }
+
+                val processedTx = protocol.postProcessUnsignedTx(unsignedMap)
+                val finalJson = if (processedTx.isNotEmpty()) {
+                    org.json.JSONObject(processedTx).toString()
+                } else txJson
+
+                var ergopayUrl = ""
+                if (isErgopayWallet) {
+                    try {
+                        ergopayUrl = signer.reduceTxForErgopay(txDict, address, buildHeadersJson)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "ErgoPay URL generation failed for redeem: ${e.message}", e)
+                        throw Exception("ErgoPay generation failed: ${e.message}")
+                    }
+                }
+
+                val redeemQuote = state.bankRedeemQuote
+                val reviewParams = ReviewParams(
+                    buyAmount = "%.6f".format((redeemQuote?.ergReceived ?: 0L).toDouble() / 1_000_000_000.0),
+                    buyToken = "ERG",
+                    payAmount = "%.${protocol.mintTokenDecimals}f".format(amount),
+                    payToken = protocol.mintTokenName,
+                    minerFee = state.minerFee,
+                    serviceFee = (redeemQuote?.feeBreakdown?.firstOrNull { it.first.contains("App") }?.second ?: 0L).toDouble() / 1_000_000_000.0,
+                    isSimulation = state.isSimulation,
+                    isErgopay = isErgopayWallet,
+                    ergopayUrl = ergopayUrl
+                )
+
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(
+                        isBuildingTx = false,
+                        preparedTxData = txDict,
+                        unsignedTxJson = finalJson,
+                        reviewParams = reviewParams,
+                        cachedHeadersJson = buildHeadersJson
+                    )
+                    onReady()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "buildRedeemTransaction failed: ${e.message}", e)
                 withContext(Dispatchers.Main) {
                     _uiState.value = _uiState.value.copy(isBuildingTx = false, bankError = e.message)
                 }
@@ -1150,12 +1304,15 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 val jsonTx = signer.toUnsignedJson(txDict, addr)
 
                 val isErgopayWallet = current.selectedWallet.contains("ergopay", ignoreCase = true) || current.selectedWallet.isEmpty()
+
+                // Fetch block headers now for ErgoPay and cache them for sign time
+                val buildHeaders = client.api.getLastHeaders(10)
+                val buildHeadersJson = com.google.gson.Gson().toJson(buildHeaders)
+
                 var ergopayUrl = ""
                 if (isErgopayWallet) {
                     try {
-                        val headers = client.api.getLastHeaders(10)
-                        val headersJson = com.google.gson.Gson().toJson(headers)
-                        ergopayUrl = signer.reduceTxForErgopay(txDict, addr, headersJson)
+                        ergopayUrl = signer.reduceTxForErgopay(txDict, addr, buildHeadersJson)
                     } catch (e: Exception) {
                         android.util.Log.e(TAG, "ErgoPay URL generation failed: ${e.message}", e)
                         throw Exception("ErgoPay generation failed: ${e.message}")
@@ -1179,7 +1336,8 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                     isBuildingTx = false,
                     preparedTxData = txDict,
                     unsignedTxJson = jsonTx,
-                    reviewParams = params
+                    reviewParams = params,
+                    cachedHeadersJson = buildHeadersJson
                 )
                 
                 Log.d(TAG, "Executing onSuccess callback...")
@@ -1227,12 +1385,24 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 val nodeUrl = if (selNodeKey.contains(": ")) selNodeKey.substringAfter(": ") else "https://ergo-node.eutxo.de"
                 val signer = com.piggytrade.piggytrade.blockchain.ErgoSigner(nodeUrl)
 
-                val headers = client.api.getLastHeaders(10)
-                val headersJson = com.google.gson.Gson().toJson(headers)
+                // Use headers cached at BUILD time so sigma-rust evaluates HEIGHT == the HEIGHT
+                // used when computing R4. Fetching fresh headers at sign time risks a race:
+                // if blocks are mined while the user sits on the review screen, HEIGHT increases
+                // and R4 (= buildHeight + 364) can fall outside [HEIGHT+360, HEIGHT+365].
+                val headersJson = current.cachedHeadersJson.ifBlank {
+                    // Fallback: no cached headers (shouldn't happen for bank TXs)
+                    Log.w(TAG, "No cached headers — falling back to fresh fetch. R4 timing may be off.")
+                    com.google.gson.Gson().toJson(client.api.getLastHeaders(10))
+                }
 
                 // Sign
                 val signedJson = signer.signTransaction(txDict, current.selectedAddress, mnemonic, "", headersJson)
                 val signedTxMap = signer.txGson.fromJson(signedJson, Map::class.java) as Map<String, Any>
+
+                // Log the full signed TX for debugging
+                Log.d(TAG, "=== SIGNED TX JSON ===")
+                Log.d(TAG, signedJson)
+                Log.d(TAG, "=== END SIGNED TX ===")
 
                 val txId = try {
                     if (current.isSimulation) {
@@ -1243,7 +1413,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 } catch (he: retrofit2.HttpException) {
                     val errorBody = he.response()?.errorBody()?.string() ?: he.message()
-                    throw Exception("Node rejected tx: $errorBody")
+                    throw Exception("Node rejected tx: $errorBody\n\n=== SIGNED TX JSON ===\n$signedJson")
                 }
 
                 // Success

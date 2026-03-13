@@ -275,6 +275,7 @@ class ErgoSigner(private val nodeUrl: String) {
         val dataInputBoxesJson = txGson.toJson(sanitizedDataInputs)
         val contextExtensionsJson = txGson.toJson(contextExtensions)
         val outputCandidatesJson = txGson.toJson(outputCandidates)
+
         return org.ergoplatform.wallet.jni.WalletLib.signTransactionJson(
             mnemonic, mnemonicPass, inputBoxesJson, dataInputBoxesJson, outputCandidatesJson,
             fee, senderAddress, currentHeight, lastHeadersJson, contextExtensionsJson

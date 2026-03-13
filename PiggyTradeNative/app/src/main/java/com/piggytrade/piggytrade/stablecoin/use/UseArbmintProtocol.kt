@@ -176,7 +176,15 @@ class UseArbmintProtocol : StablecoinProtocol {
     ): Map<String, Any> {
         val state = fetchProtocolState(client, senderAddress, checkMempool)
         val amountUseInt = (amount * UseConfig.USE_DECIMALS).toLong()
-        val height = client.getHeight()
+
+        // Same height fix as UseFreemintProtocol — use max(fullHeight, lastHeaders[0])
+        // and embed headers for the ViewModel to patch before passing to sigma-rust.
+        val fullHeight = client.getHeight()
+        val lastHeaders = client.api.getLastHeaders(10)
+        val lastHeaderHeight = (lastHeaders.firstOrNull()?.get("height") as? Number)?.toInt() ?: 0
+        val height = maxOf(fullHeight, lastHeaderHeight)
+        Log.d(TAG, "buildTransaction: fullHeight=$fullHeight, lastHeaders[0]=$lastHeaderHeight, using=$height")
+
         val rates = calculateRates(state.oracleRateWhole)
 
         // ── Fees ──────────────────────────────────────────────────────────────
@@ -301,7 +309,9 @@ class UseArbmintProtocol : StablecoinProtocol {
             "input_boxes" to inputBoxes,
             "data_input_boxes" to listOf(state.oracleBoxMap, state.lpBoxMap, state.trackerBoxMap),
             "context_extensions" to mapOf("2" to mapOf("0" to "0402")),
-            "current_height" to height
+            "current_height" to height,
+            "_buildHeight" to height,
+            "_headersJson" to com.google.gson.Gson().toJson(lastHeaders)
         )
     }
 
