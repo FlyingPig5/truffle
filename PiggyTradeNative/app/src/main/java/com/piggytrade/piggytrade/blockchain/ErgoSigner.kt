@@ -250,7 +250,8 @@ class ErgoSigner(private val nodeUrl: String) {
         senderAddress: String,
         mnemonic: String,
         mnemonicPass: String,
-        lastHeadersJson: String
+        lastHeadersJson: String,
+        addressCount: Int = 1
     ): String {
         val inputBoxes = txDict["input_boxes"] as? List<Map<String, Any>> ?: emptyList()
         val dataInputBoxes = txDict["data_input_boxes"] as? List<Map<String, Any>> ?: emptyList()
@@ -282,7 +283,8 @@ class ErgoSigner(private val nodeUrl: String) {
 
         return org.ergoplatform.wallet.jni.WalletLib.signTransactionJson(
             mnemonic, mnemonicPass, inputBoxesJson, dataInputBoxesJson, outputCandidatesJson,
-            fee, senderAddress, currentHeight, lastHeadersJson, contextExtensionsJson
+            fee, senderAddress, currentHeight, lastHeadersJson, contextExtensionsJson,
+            addressCount
         )
     }
 
