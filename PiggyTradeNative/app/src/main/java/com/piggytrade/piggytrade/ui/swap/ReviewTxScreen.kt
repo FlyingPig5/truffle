@@ -185,6 +185,47 @@ fun ReviewTxScreen(
 
             if (showJson) {
                 item {
+                    // Copy buttons for debug
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                clipboardManager.setText(AnnotatedString(formattedJson))
+                                Toast.makeText(context, "Unsigned TX JSON copied", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.weight(1f).height(36.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = ColorSelectionBg),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text("📋 Copy Unsigned TX", color = Color.White, fontSize = 11.sp)
+                        }
+
+                        // Copy the raw request data (pre-signing input map)
+                        if (uiState.preparedTxData != null) {
+                            Button(
+                                onClick = {
+                                    try {
+                                        val gson = GsonBuilder().setPrettyPrinting().create()
+                                        val txDataJson = gson.toJson(uiState.preparedTxData)
+                                        clipboardManager.setText(AnnotatedString(txDataJson))
+                                        Toast.makeText(context, "TX Request Data copied", Toast.LENGTH_SHORT).show()
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Copy failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = ColorSelectionBg),
+                                contentPadding = PaddingValues(horizontal = 8.dp)
+                            ) {
+                                Text("📋 Copy Request Data", color = Color.White, fontSize = 11.sp)
+                            }
+                        }
+                    }
+
                     SelectionContainer {
                         Text(
                             text = formattedJson,

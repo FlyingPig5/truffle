@@ -86,6 +86,7 @@ dependencies {
     // Crypto & Security
     implementation(libs.bouncycastle)
     implementation(libs.androidx.biometric)
+    implementation(libs.androidx.security.crypto)
 
     // Ergo Blockchain (Integrated as local source/jniLibs)
     // implementation(files("libs/ergo-lib-jni.aar"))

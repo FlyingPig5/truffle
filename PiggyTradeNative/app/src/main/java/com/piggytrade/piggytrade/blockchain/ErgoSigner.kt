@@ -1,5 +1,7 @@
 package com.piggytrade.piggytrade.blockchain
 
+import com.piggytrade.piggytrade.BuildConfig
+
 import android.util.Base64
 import com.google.gson.Gson
 import com.piggytrade.piggytrade.protocol.ProtocolConfig
@@ -194,12 +196,14 @@ class ErgoSigner(private val nodeUrl: String) {
         val outputCandidatesJson = txGson.toJson(outputCandidates)
 
         return try {
-            android.util.Log.d("ErgoSigner", "buildReducedTxBytes: inputBoxes=${inputBoxesJson.take(200)}")
-            android.util.Log.d("ErgoSigner", "buildReducedTxBytes: dataInputBoxes=${dataInputBoxesJson.take(200)}")
-            android.util.Log.d("ErgoSigner", "buildReducedTxBytes: outputCandidates=${outputCandidatesJson.take(800)}")
-            android.util.Log.d("ErgoSigner", "buildReducedTxBytes: fee=$fee height=$currentHeight addr=$senderAddress")
-            android.util.Log.d("ErgoSigner", "buildReducedTxBytes: extensions=$contextExtensionsJson")
-            android.util.Log.d("ErgoSigner", "buildReducedTxBytes: creationHeight per candidate: ${outputCandidates.map { (it["creationHeight"] as? Number)?.toInt() }}")
+            if (BuildConfig.DEBUG) {
+                android.util.Log.d("ErgoSigner", "buildReducedTxBytes: inputBoxes=${inputBoxesJson.take(200)}")
+                android.util.Log.d("ErgoSigner", "buildReducedTxBytes: dataInputBoxes=${dataInputBoxesJson.take(200)}")
+                android.util.Log.d("ErgoSigner", "buildReducedTxBytes: outputCandidates=${outputCandidatesJson.take(800)}")
+                android.util.Log.d("ErgoSigner", "buildReducedTxBytes: fee=$fee height=$currentHeight addr=$senderAddress")
+                android.util.Log.d("ErgoSigner", "buildReducedTxBytes: extensions=$contextExtensionsJson")
+                android.util.Log.d("ErgoSigner", "buildReducedTxBytes: creationHeight per candidate: ${outputCandidates.map { (it["creationHeight"] as? Number)?.toInt() }}")
+            }
             val base64Reduced = org.ergoplatform.wallet.jni.WalletLib.buildReducedTxBytes(
                 inputBoxesJson,
                 dataInputBoxesJson,
@@ -210,7 +214,7 @@ class ErgoSigner(private val nodeUrl: String) {
                 lastHeadersJson,
                 contextExtensionsJson
             )
-            android.util.Log.d("ErgoSigner", "buildReducedTxBytes SUCCESS: ${base64Reduced.take(40)}...")
+            if (BuildConfig.DEBUG) android.util.Log.d("ErgoSigner", "buildReducedTxBytes SUCCESS: ${base64Reduced.take(40)}...")
             toErgoPayUrl(base64Reduced)
         } catch (e: Exception) {
             android.util.Log.e("ErgoSigner", "buildReducedTxBytes FAILED: ${e.message}", e)

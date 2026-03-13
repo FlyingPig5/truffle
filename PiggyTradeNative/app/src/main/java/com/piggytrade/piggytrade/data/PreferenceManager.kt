@@ -2,12 +2,62 @@ package com.piggytrade.piggytrade.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
+import com.piggytrade.piggytrade.BuildConfig
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKeys
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 
 class PreferenceManager(context: Context) {
-    private val prefs: SharedPreferences = context.getSharedPreferences("piggy_prefs", Context.MODE_PRIVATE)
     private val gson = Gson()
+
+    private val prefs: SharedPreferences = try {
+        val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
+        val encPrefs = EncryptedSharedPreferences.create(
+            "piggy_prefs_encrypted",
+            masterKeyAlias,
+            context,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+
+        // One-time migration from old unencrypted prefs
+        migrateFromUnencrypted(context, encPrefs)
+
+        encPrefs
+    } catch (e: Exception) {
+        // Fallback to standard prefs if EncryptedSharedPreferences fails
+        // (e.g. on devices without hardware keystore support)
+        Log.e("PreferenceManager", "EncryptedSharedPreferences failed, using standard prefs: ${e.message}")
+        context.getSharedPreferences("piggy_prefs", Context.MODE_PRIVATE)
+    }
+
+    private fun migrateFromUnencrypted(context: Context, encryptedPrefs: SharedPreferences) {
+        val oldPrefs = context.getSharedPreferences("piggy_prefs", Context.MODE_PRIVATE)
+        val oldAll = oldPrefs.all
+        if (oldAll.isEmpty()) return
+
+        // Only migrate if encrypted prefs are empty (first launch after update)
+        if (encryptedPrefs.all.isNotEmpty()) return
+
+        if (BuildConfig.DEBUG) Log.i("PreferenceManager", "Migrating ${oldAll.size} entries from unencrypted to encrypted prefs")
+        val editor = encryptedPrefs.edit()
+        for ((key, value) in oldAll) {
+            when (value) {
+                is String -> editor.putString(key, value)
+                is Boolean -> editor.putBoolean(key, value)
+                is Int -> editor.putInt(key, value)
+                is Long -> editor.putLong(key, value)
+                is Float -> editor.putFloat(key, value)
+            }
+        }
+        editor.apply()
+
+        // Clear old unencrypted prefs after successful migration
+        oldPrefs.edit().clear().apply()
+        if (BuildConfig.DEBUG) Log.i("PreferenceManager", "Migration complete, old prefs cleared")
+    }
 
     companion object {
         private const val KEY_WALLETS = "wallets"

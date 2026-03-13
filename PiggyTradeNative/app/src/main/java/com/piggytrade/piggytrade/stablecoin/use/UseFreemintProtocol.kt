@@ -1,6 +1,7 @@
 package com.piggytrade.piggytrade.stablecoin.use
 
 import android.util.Log
+import com.piggytrade.piggytrade.BuildConfig
 import com.piggytrade.piggytrade.network.NodeClient
 import com.piggytrade.piggytrade.stablecoin.EligibilityResult
 import com.piggytrade.piggytrade.stablecoin.MintQuote
@@ -54,23 +55,33 @@ class UseFreemintProtocol : StablecoinProtocol {
             val lpRate = if (state.lpUseAmount > 0) state.lpNanoErg / state.lpUseAmount else 0L
             val rateCheckPasses = lpRate * 100 > contractOracleRate * 98
 
+            val lpErgPerUse = if (state.lpUseAmount > 0) state.lpNanoErg.toDouble() / state.lpUseAmount.toDouble() / 1_000_000_000.0 * UseConfig.USE_DECIMALS else 0.0
+            val usePerErgLp = if (lpErgPerUse > 0) 1.0 / lpErgPerUse else 0.0
+
+            val rateRatioPct = if (contractOracleRate > 0) "%.1f".format(lpRate.toDouble() / contractOracleRate.toDouble() * 100) else "?"
+
+            val isReset = height > resolveCapacity(state, height).second - UseConfig.FREEMINT_CYCLE_BLOCKS
             val fields = buildList {
                 add(StatusField(
-                    "Available this cycle", availableDisplay,
+                    "Available to mint", availableDisplay,
                     if (available > 0) StatusField.Status.OK else StatusField.Status.ERROR
                 ))
-                add(StatusField("Cycle resets in", "$blocksRemaining blocks"))
                 add(StatusField("Oracle price", "%.3f USE / ERG".format(usePerErg)))
+                add(StatusField("LP price", "%.3f USE / ERG".format(usePerErgLp)))
                 add(StatusField(
-                    "LP rate check",
-                    if (rateCheckPasses) "OK (LP rate within 2% of oracle)" else "BLOCKED (LP rate too far from oracle)",
+                    "Rate check (≥98%)", if (rateCheckPasses) "Passed ✓ ($rateRatioPct%)" else "Failed ($rateRatioPct% < 98%)",
                     if (rateCheckPasses) StatusField.Status.OK else StatusField.Status.ERROR
+                ))
+                add(StatusField(
+                    "Cycle reset",
+                    if (blocksRemaining == 0) "Ready ✓" else "$blocksRemaining blocks remaining",
+                    if (blocksRemaining == 0) StatusField.Status.OK else StatusField.Status.NEUTRAL
                 ))
             }
 
             val canMint = available > 0 && rateCheckPasses
             val reason = when {
-                !rateCheckPasses -> "Freemint blocked: LP rate (${lpRate}) has deviated >2% from oracle rate (${contractOracleRate}). Try again later."
+                !rateCheckPasses -> "LP rate is ${rateRatioPct}% of oracle (needs ≥98%)"
                 available <= 0 -> "No capacity available this cycle"
                 else -> null
             }
@@ -158,7 +169,7 @@ class UseFreemintProtocol : StablecoinProtocol {
         val lastHeaders = client.api.getLastHeaders(10)
         val lastHeaderHeight = (lastHeaders.firstOrNull()?.get("height") as? Number)?.toInt() ?: 0
         val height = maxOf(fullHeight, lastHeaderHeight)
-        Log.d(TAG, "buildTransaction: fullHeight=$fullHeight, lastHeaders[0]=$lastHeaderHeight, using=$height")
+        if (BuildConfig.DEBUG) Log.d(TAG, "buildTransaction: fullHeight=$fullHeight, lastHeaders[0]=$lastHeaderHeight, using=$height")
         // ── Pre-flight contract validation ────────────────────────────────────
         // Contract: validRateFreeMint = lpRate * 100 > oracleRate * 98
         val contractOracleRate = state.oracleRate / UseConfig.USE_DECIMALS

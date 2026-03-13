@@ -50,6 +50,7 @@ fun SettingsScreen(
     var showExportWarning by remember { mutableStateOf(false) }
     var showImportConfirm by remember { mutableStateOf(false) }
     var showSyncConfirm by remember { mutableStateOf(false) }
+    var showHttpWarning by remember { mutableStateOf(false) }
     var pendingImportJson by remember { mutableStateOf("") }
 
     val importLauncher = rememberLauncherForActivityResult(
@@ -297,18 +298,45 @@ fun SettingsScreen(
                 modifier = Modifier.padding(top = 20.dp, bottom = 5.dp, start = 10.dp)
             )
             TogaRow(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 10.dp, end = 5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(text = "Count:", color = ColorText, fontSize = 12.sp)
-                Slider(
-                    value = uiState.numFavorites.toFloat(),
-                    onValueChange = { viewModel.setNumFavorites(it.toInt()) },
-                    valueRange = 4f..20f,
-                    steps = 15,
-                    modifier = Modifier.weight(1f).padding(horizontal = 10.dp)
+                Text(
+                    text = "Show Favorites",
+                    color = ColorText,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
                 )
-                Text(text = "${uiState.numFavorites}", color = ColorText, fontSize = 12.sp, modifier = Modifier.width(30.dp))
+                Switch(
+                    checked = uiState.showFavorites,
+                    onCheckedChange = { viewModel.setShowFavorites(it) },
+                    modifier = Modifier.scale(0.8f)
+                )
+            }
+            Text(
+                text = "Quick-access buttons on the DEX tab — tap to set the FROM token, long-press to reassign a slot.",
+                color = ColorTextDim,
+                fontSize = 10.sp,
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 4.dp)
+            )
+            if (uiState.showFavorites) {
+                TogaRow(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(text = "Count:", color = ColorText, fontSize = 12.sp)
+                    Slider(
+                        value = uiState.numFavorites.toFloat(),
+                        onValueChange = { viewModel.setNumFavorites(it.toInt()) },
+                        valueRange = 4f..20f,
+                        steps = 15,
+                        modifier = Modifier.weight(1f).padding(horizontal = 10.dp)
+                    )
+                    Text(text = "${uiState.numFavorites}", color = ColorText, fontSize = 12.sp, modifier = Modifier.width(30.dp))
+                }
             }
             TogaRow(
                 modifier = Modifier
@@ -433,6 +461,63 @@ fun SettingsScreen(
                     ) {
                         Text("Restore Wallets", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
+                }
+
+                // ── Network Security ──────────────────────────────────────────
+                Text(
+                    text = "NETWORK SECURITY",
+                    color = ColorText,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 20.dp, bottom = 5.dp, start = 10.dp)
+                )
+
+                TogaRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 10.dp, end = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Allow HTTP Nodes",
+                        color = if (uiState.allowHttpNodes) Color(0xFFFF6B35) else ColorText,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(
+                        checked = uiState.allowHttpNodes,
+                        onCheckedChange = { enabled ->
+                            if (enabled) {
+                                showHttpWarning = true
+                            } else {
+                                viewModel.setAllowHttpNodes(false)
+                            }
+                        },
+                        modifier = Modifier.scale(0.8f),
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color(0xFFFF6B35),
+                            checkedTrackColor = Color(0xFFFF6B35).copy(alpha = 0.5f)
+                        )
+                    )
+                }
+
+                if (uiState.allowHttpNodes) {
+                    Text(
+                        text = "⚠️ HTTP traffic is UNENCRYPTED. Your wallet addresses, balances, and transaction data " +
+                               "can be intercepted on public WiFi. Only use this for local network nodes.",
+                        color = Color(0xFFFF6B35),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp)
+                    )
+                } else {
+                    Text(
+                        text = "Only HTTPS nodes are allowed by default. Enable this to use HTTP nodes (not recommended).",
+                        color = ColorTextDim,
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp)
+                    )
                 }
 
             }
@@ -571,6 +656,45 @@ fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showImportConfirm = false }) {
+                    Text("Cancel", color = Color.White)
+                }
+            }
+        )
+    }
+
+    if (showHttpWarning) {
+        AlertDialog(
+            onDismissRequest = { showHttpWarning = false },
+            title = {
+                Text(
+                    "⚠️ SECURITY WARNING",
+                    color = Color(0xFFFF6B35),
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 18.sp
+                )
+            },
+            text = {
+                Text(
+                    "Enabling HTTP nodes allows UNENCRYPTED network traffic.\n\n" +
+                    "Your wallet addresses, balances, and transaction data could be intercepted " +
+                    "by anyone on the same network (e.g. public WiFi, coffee shops, airports).\n\n" +
+                    "Only enable this if you are connecting to a node on your LOCAL network " +
+                    "that does not support HTTPS.",
+                    color = Color.White,
+                    fontSize = 14.sp
+                )
+            },
+            containerColor = ColorCard,
+            confirmButton = {
+                TextButton(onClick = {
+                    showHttpWarning = false
+                    viewModel.setAllowHttpNodes(true)
+                }) {
+                    Text("I UNDERSTAND THE RISK", color = Color(0xFFFF6B35), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showHttpWarning = false }) {
                     Text("Cancel", color = Color.White)
                 }
             }

@@ -272,7 +272,7 @@ fun AddWalletScreen(
                         onValueChange = { confirmPassword = it },
                         placeholder = { Text("Confirm Password", color = Color(0xFFAAAAAA)) },
                         visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 5.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = ColorInputBg,
                             unfocusedContainerColor = ColorInputBg,
@@ -282,6 +282,27 @@ fun AddWalletScreen(
                             unfocusedTextColor = Color.White
                         ),
                         shape = RoundedCornerShape(10.dp)
+                    )
+
+                    // Password strength indicator
+                    val pwColor = when {
+                        password.isEmpty() -> ColorTextDim
+                        password.length < 8 -> Color(0xFFFF4444)
+                        password.length < 12 -> Color(0xFFFF6B35)
+                        else -> Color(0xFF28A745)
+                    }
+                    val pwText = when {
+                        password.isEmpty() -> "Minimum 8 characters required"
+                        password.length < 8 -> "Too short — ${8 - password.length} more characters needed"
+                        password != confirmPassword && confirmPassword.isNotEmpty() -> "Passwords do not match"
+                        password.length < 12 -> "Fair — consider a longer password"
+                        else -> "Strong password ✓"
+                    }
+                    Text(
+                        text = pwText,
+                        color = pwColor,
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(start = 4.dp, bottom = 15.dp)
                     )
                 }
 
@@ -314,7 +335,7 @@ fun AddWalletScreen(
                 walletName.isNotEmpty() && address.isNotEmpty()
             } else {
                 walletName.isNotEmpty() && mnemonic.isNotEmpty() && 
-                (useBiometrics || (password.isNotEmpty() && password == confirmPassword))
+                (useBiometrics || (password.length >= 8 && password == confirmPassword))
             }
 
             Button(

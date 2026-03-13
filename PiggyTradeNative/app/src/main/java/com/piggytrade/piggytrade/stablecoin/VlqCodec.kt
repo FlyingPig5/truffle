@@ -50,8 +50,8 @@ object VlqCodec {
      * @param prefix Two-hex-char type prefix, e.g. "04" or "05".
      */
     fun encode(value: Long, prefix: String): String {
-        // ZigZag encode: (value << 1) XOR (value >> 31)
-        var z = (value shl 1) xor (value shr 31)
+        // ZigZag encode: (value << 1) XOR (value >> 63) — must use 63 for Long, not 31
+        var z = (value shl 1) xor (value shr 63)
 
         val bytes = mutableListOf<Int>()
         while (z >= 0x80L) {

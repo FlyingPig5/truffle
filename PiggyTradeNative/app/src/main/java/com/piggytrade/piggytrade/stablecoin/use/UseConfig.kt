@@ -89,7 +89,7 @@ object UseConfig {
      *  Using T_free + T_buffer = 365 (the maximum) maximises the window between when
      *  the tx is built (on the Review screen) and when the user actually signs it.
      *  The tx will succeed as long as signing happens within 5 blocks (~10 min) of build. */
-    const val FREEMINT_CYCLE_BLOCKS = 362  // T_free=360 + 2 buffer (contract allows [HEIGHT+360, HEIGHT+365])
+    const val FREEMINT_CYCLE_BLOCKS = 364  // T_free=360 + 4 buffer (contract allows [HEIGHT+360, HEIGHT+365]). Matches reference impl.
 
     /** Minimum LP rate premium required for Arbmint: 101% (THRESHOLD_PERCENT). */
     const val THRESHOLD_PERCENT = 101L

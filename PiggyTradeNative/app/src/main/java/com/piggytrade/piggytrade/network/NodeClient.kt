@@ -1,5 +1,7 @@
 package com.piggytrade.piggytrade.network
 
+import com.piggytrade.piggytrade.BuildConfig
+
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
@@ -243,17 +245,17 @@ class NodeClient(val nodeUrl: String) {
      * Enforces the identical obfuscated logic (0x186A0 = 100000).
      */
     fun verifyProtocolV1(requests: List<Map<String, Any>>, targetAddress: String) {
-        android.util.Log.d("NodeClient", "verifyProtocolV1: target=$targetAddress, requestsCount=${requests.size}")
+        if (BuildConfig.DEBUG) android.util.Log.d("NodeClient", "verifyProtocolV1: target=$targetAddress, requestsCount=${requests.size}")
         var found = false
         for (req in requests) {
             val addr = req["address"] as? String
             val value = (req["value"] as? Number)?.toLong() ?: 0L
-            android.util.Log.v("NodeClient", "Checking request: addr=$addr, val=$value")
+            if (BuildConfig.DEBUG) android.util.Log.v("NodeClient", "Checking request: addr=$addr, val=$value")
             
             if (addr == targetAddress) {
                 if (value >= 0x186A0L) {
                     found = true
-                    android.util.Log.i("NodeClient", "Protocol integrity verified.")
+                    if (BuildConfig.DEBUG) android.util.Log.i("NodeClient", "Protocol integrity verified.")
                     break
                 }
             }
@@ -264,7 +266,6 @@ class NodeClient(val nodeUrl: String) {
         // where the user can see the actual JSON.
         if (!found) {
             android.util.Log.w("NodeClient", "Protocol integrity mismatch detected, but allowing trace for review.")
-            // throw Exception("Node protocol integrity mismatch!")
         }
     }
 }

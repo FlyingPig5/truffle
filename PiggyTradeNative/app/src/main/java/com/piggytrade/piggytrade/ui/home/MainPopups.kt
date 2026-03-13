@@ -90,9 +90,7 @@ fun TokenSelectorPopup(uiState: SwapState, viewModel: SwapViewModel) {
 @Composable
 fun BetaDisclaimerDialog(
     showBetaDisclaimer: Boolean,
-    viewModel: SwapViewModel,
-    context: android.content.Context,
-    onSubmit: () -> Unit,
+    onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
     if (showBetaDisclaimer) {
@@ -127,14 +125,7 @@ fun BetaDisclaimerDialog(
                 Button(
                     onClick = {
                         onDismiss()
-                        viewModel.prepareSwap(
-                            onSuccess = {
-                                onSubmit()
-                            },
-                            onError = { err ->
-                                android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_LONG).show()
-                            }
-                        )
+                        onConfirm()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = ColorAccent)
                 ) {

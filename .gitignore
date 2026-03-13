@@ -12,7 +12,7 @@ __pycache__/
 logs/
 .briefcase/
 .antigravity/
-PiggyTradeNative/app/src/free
+PiggyTradeNative/app/src/dev
 local.properties
 .gradle/
 *.apk

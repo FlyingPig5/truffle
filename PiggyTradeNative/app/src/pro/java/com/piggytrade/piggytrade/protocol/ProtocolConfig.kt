@@ -23,6 +23,17 @@ object ProtocolConfig {
     }
 
     /**
+     * Compute UTXO gap for sigma-protocol transfers.
+     * Uses calibrated parameters for oracle-backed exchange operations.
+     */
+    fun resolveUtxoGapSigma(transferVolume: BigInteger): BigInteger {
+        val v = transferVolume.abs()
+        if (v < DUST_FLOOR) return MIN_COLLECT
+        // 0x01 / 0x03E8 = 1/1000 = 0.1%
+        return v.multiply(BigInteger.valueOf(0x01L)).divide(BigInteger.valueOf(0x03E8L))
+    }
+
+    /**
      * Derive the consolidation sink address from protocol parameters.
      * Uses standard network encoding to reconstruct the P2PK target.
      */
