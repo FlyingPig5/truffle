@@ -118,7 +118,9 @@ interface StablecoinProtocol {
         amount: Double,
         senderAddress: String,
         miningFee: Long,
-        checkMempool: Boolean
+        checkMempool: Boolean,
+        changeAddress: String = senderAddress,
+        userAddresses: Set<String> = emptySet()
     ): Map<String, Any>
 
     /**
@@ -152,6 +154,8 @@ interface StablecoinProtocol {
         amount: Double,
         senderAddress: String,
         miningFee: Long,
-        checkMempool: Boolean
+        checkMempool: Boolean,
+        changeAddress: String = senderAddress,
+        userAddresses: Set<String> = emptySet()
     ): Map<String, Any> = throw UnsupportedOperationException("Redeem not supported by $id")
 }

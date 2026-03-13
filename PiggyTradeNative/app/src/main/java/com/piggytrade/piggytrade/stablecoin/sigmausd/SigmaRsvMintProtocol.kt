@@ -44,7 +44,7 @@ class SigmaRsvMintProtocol : StablecoinProtocol {
         checkMempool: Boolean
     ): EligibilityResult {
         return try {
-            val state = sigmaUsdHelper.fetchBankState(client, senderAddress, checkMempool)
+            val state = sigmaUsdHelper.fetchBankState(client, setOf(senderAddress), checkMempool)
             val bank = state.bank
 
             val ratio = bank.currentReserveRatio()
@@ -116,7 +116,7 @@ class SigmaRsvMintProtocol : StablecoinProtocol {
         senderAddress: String,
         checkMempool: Boolean
     ): MintQuote {
-        val state = sigmaUsdHelper.fetchBankState(client, senderAddress, checkMempool)
+        val state = sigmaUsdHelper.fetchBankState(client, setOf(senderAddress), checkMempool)
         val amountRaw = amount.toLong()  // SigRSV has 0 decimals
 
         val baseCost = state.bank.baseCostToMintReserveCoin(amountRaw)
@@ -149,7 +149,7 @@ class SigmaRsvMintProtocol : StablecoinProtocol {
         senderAddress: String,
         checkMempool: Boolean
     ): RedeemQuote {
-        val state = sigmaUsdHelper.fetchBankState(client, senderAddress, checkMempool)
+        val state = sigmaUsdHelper.fetchBankState(client, setOf(senderAddress), checkMempool)
         val amountRaw = amount.toLong()
 
         val baseAmount = state.bank.baseAmountFromRedeemingReserveCoin(amountRaw)
@@ -182,9 +182,12 @@ class SigmaRsvMintProtocol : StablecoinProtocol {
         amount: Double,
         senderAddress: String,
         miningFee: Long,
-        checkMempool: Boolean
+        checkMempool: Boolean,
+        changeAddress: String,
+        userAddresses: Set<String>
     ): Map<String, Any> {
-        val state = sigmaUsdHelper.fetchBankState(client, senderAddress, checkMempool)
+        val addrs = if (userAddresses.isNotEmpty()) userAddresses else setOf(senderAddress)
+        val state = sigmaUsdHelper.fetchBankState(client, addrs, checkMempool)
         val amountRaw = amount.toLong()
         val height = client.getHeight()
 
@@ -216,7 +219,7 @@ class SigmaRsvMintProtocol : StablecoinProtocol {
         val requestsList = mutableListOf(
             buildBankOutput(state, newBankValue, state.bankStableTokens, newBankReserve, state.circulatingStable, newCircReserve, height),
             mapOf(
-                "address" to senderAddress,
+                "address" to changeAddress,
                 "value" to userChangeValue,
                 "assets" to userChangeAssets,
                 "registers" to mapOf(
@@ -261,9 +264,12 @@ class SigmaRsvMintProtocol : StablecoinProtocol {
         amount: Double,
         senderAddress: String,
         miningFee: Long,
-        checkMempool: Boolean
+        checkMempool: Boolean,
+        changeAddress: String,
+        userAddresses: Set<String>
     ): Map<String, Any> {
-        val state = sigmaUsdHelper.fetchBankState(client, senderAddress, checkMempool)
+        val addrs = if (userAddresses.isNotEmpty()) userAddresses else setOf(senderAddress)
+        val state = sigmaUsdHelper.fetchBankState(client, addrs, checkMempool)
         val amountRaw = amount.toLong()
         val height = client.getHeight()
 
@@ -301,7 +307,7 @@ class SigmaRsvMintProtocol : StablecoinProtocol {
         val requestsList = mutableListOf(
             buildBankOutput(state, newBankValue, state.bankStableTokens, newBankReserve, state.circulatingStable, newCircReserve, height),
             mapOf(
-                "address" to senderAddress,
+                "address" to changeAddress,
                 "value" to userChangeValue,
                 "assets" to userChangeAssets,
                 "registers" to mapOf(

@@ -38,7 +38,7 @@ class DexyGoldFreemintProtocol : StablecoinProtocol {
         checkMempool: Boolean
     ): EligibilityResult {
         return try {
-            val state = fetchProtocolState(client, senderAddress, checkMempool)
+            val state = fetchProtocolState(client, setOf(senderAddress), checkMempool)
             val height = client.getHeight()
 
             val isReset = height > state.resetHeight
@@ -111,7 +111,7 @@ class DexyGoldFreemintProtocol : StablecoinProtocol {
         senderAddress: String,
         checkMempool: Boolean
     ): MintQuote {
-        val state = fetchProtocolState(client, senderAddress, checkMempool)
+        val state = fetchProtocolState(client, setOf(senderAddress), checkMempool)
         val amountDexyInt = (amount * DexyGoldConfig.DEXY_DECIMALS).toLong()
 
         val oracleRate = state.oracleRate / DexyGoldConfig.ORACLE_DIVISOR
@@ -148,9 +148,12 @@ class DexyGoldFreemintProtocol : StablecoinProtocol {
         amount: Double,
         senderAddress: String,
         miningFee: Long,
-        checkMempool: Boolean
+        checkMempool: Boolean,
+        changeAddress: String,
+        userAddresses: Set<String>
     ): Map<String, Any> {
-        val state = fetchProtocolState(client, senderAddress, checkMempool)
+        val addrs = if (userAddresses.isNotEmpty()) userAddresses else setOf(senderAddress)
+        val state = fetchProtocolState(client, addrs, checkMempool)
         val amountDexyInt = (amount * DexyGoldConfig.DEXY_DECIMALS).toLong()
 
         // Height fix: use max(fullHeight, lastHeaders[0]) + embed headers for ViewModel patching
@@ -247,7 +250,7 @@ class DexyGoldFreemintProtocol : StablecoinProtocol {
                 }
 
                 mapOf(
-                    "address" to senderAddress,
+                    "address" to changeAddress,
                     "value" to userChangeValue,
                     "assets" to userChangeAssets,
                     "registers" to emptyMap<String, Any>(),
@@ -358,7 +361,7 @@ class DexyGoldFreemintProtocol : StablecoinProtocol {
     @Suppress("UNCHECKED_CAST")
     private suspend fun fetchProtocolState(
         client: NodeClient,
-        senderAddress: String,
+        addresses: Set<String>,
         checkMempool: Boolean
     ): ProtocolState {
         // Freemint box
@@ -407,8 +410,14 @@ class DexyGoldFreemintProtocol : StablecoinProtocol {
         val buybackDortAmount = buybackAssets.firstOrNull { it["tokenId"] == DexyGoldConfig.BUYBACK_REWARD_NFT }
             ?.let { (it["amount"] as? Number)?.toLong() } ?: 1L
 
-        // User boxes
-        val (_, userNanoErg, userBoxMaps) = client.getMyAssets(senderAddress, checkMempool)
+        // User boxes — fetch from all selected addresses
+        var userNanoErg = 0L
+        val userBoxMaps = mutableListOf<Map<String, Any>>()
+        for (addr in addresses) {
+            val (_, n, boxes) = client.getMyAssets(addr, checkMempool)
+            userNanoErg += n
+            userBoxMaps.addAll(boxes)
+        }
         val userBoxIds = userBoxMaps.mapNotNull { it["boxId"] as? String }
 
         return ProtocolState(

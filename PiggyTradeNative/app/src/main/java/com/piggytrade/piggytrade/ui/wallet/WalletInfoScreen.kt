@@ -21,6 +21,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -238,6 +241,9 @@ fun WalletInfoContent(
         }
 
         // Address & Balance Card
+        val isMnemonicWallet = !walletName.contains("Ergopay", ignoreCase = true) && walletName.isNotEmpty() && walletName != "Select Wallet"
+        val numSelected = uiState.selectedAddresses.size
+        
         Card(
             modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp),
             colors = CardDefaults.cardColors(containerColor = ColorCard),
@@ -245,21 +251,36 @@ fun WalletInfoContent(
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
                 val clipboardManager = LocalClipboardManager.current
+                
+                // Show the selected (change) address prominently
+                val displayAddr = if (uiState.changeAddress.isNotEmpty()) {
+                    uiState.changeAddress
+                } else {
+                    uiState.selectedAddress
+                }
+                
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    val displayAddress = if (uiState.selectedAddress.length > 20) {
-                        "Address: ${uiState.selectedAddress.take(8)}...${uiState.selectedAddress.takeLast(8)}"
-                    } else {
-                        "Address: ${uiState.selectedAddress}"
+                    val truncatedAddr = if (displayAddr.length > 20) {
+                        "${displayAddr.take(8)}...${displayAddr.takeLast(8)}"
+                    } else displayAddr
+                    
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = truncatedAddr,
+                            color = Color.White,
+                            fontSize = 14.sp
+                        )
+                        if (numSelected > 1) {
+                            Text(
+                                text = "$numSelected addresses active",
+                                color = ColorTextDim,
+                                fontSize = 11.sp
+                            )
+                        }
                     }
-                    Text(
-                        text = displayAddress,
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        modifier = Modifier.weight(1f)
-                    )
                     IconButton(
                         onClick = { 
-                            clipboardManager.setText(AnnotatedString(uiState.selectedAddress))
+                            clipboardManager.setText(AnnotatedString(displayAddr))
                         },
                         modifier = Modifier.size(24.dp)
                     ) {
@@ -292,7 +313,12 @@ fun WalletInfoContent(
             }
         }
 
-        // Tabs
+        // Tabs — show 3 tabs for mnemonic wallets, 2 for ErgoPay
+        val tabLabels = if (isMnemonicWallet) {
+            listOf("Tokens", "Transactions", "Addresses")
+        } else {
+            listOf("Tokens", "Transactions")
+        }
         var selectedTab by remember { mutableStateOf(0) }
         TabRow(
             selectedTabIndex = selectedTab,
@@ -309,11 +335,10 @@ fun WalletInfoContent(
             },
             modifier = Modifier.padding(bottom = 15.dp)
         ) {
-            Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }) {
-                Text("Tokens", modifier = Modifier.padding(vertical = 10.dp), fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal)
-            }
-            Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }) {
-                Text("Transaction History", modifier = Modifier.padding(vertical = 10.dp), fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal)
+            tabLabels.forEachIndexed { index, label ->
+                Tab(selected = selectedTab == index, onClick = { selectedTab = index }) {
+                    Text(label, modifier = Modifier.padding(vertical = 10.dp), fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal)
+                }
             }
         }
 
@@ -334,7 +359,7 @@ fun WalletInfoContent(
                     }
                 }
             }
-        } else {
+        } else if (selectedTab == 1) {
             val networkTrades = uiState.networkTrades
             
             if (networkTrades.isEmpty() && !uiState.isLoadingHistory) {
@@ -363,7 +388,13 @@ fun WalletInfoContent(
                     }
                 }
             }
-            }
+        } else if (selectedTab == 2) {
+            // ─── ADDRESSES TAB ─────────────────────────────────────────────
+            AddressManagementTab(
+                uiState = uiState,
+                viewModel = viewModel
+            )
+        }
         }
     }
 }
@@ -615,5 +646,272 @@ fun CollapsibleBoxRow(box: TxBox, viewModel: SwapViewModel) {
                     .padding(top = 2.dp)
             )
         }
+    }
+}
+
+/**
+ * Address management tab for mnemonic wallets.
+ * Shows all derived addresses with checkboxes for selection and radio buttons for change address.
+ */
+@Composable
+fun AddressManagementTab(
+    uiState: SwapState,
+    viewModel: SwapViewModel
+) {
+    val clipboardManager = LocalClipboardManager.current
+    
+    // Delete confirmation state
+    var addressToDelete by remember { mutableStateOf<String?>(null) }
+    var deleteBalance by remember { mutableStateOf(0.0) }
+    
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+    ) {
+        // Header
+        Text(
+            text = "Derivation Addresses (EIP-3)",
+            color = ColorAccent,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        Text(
+            text = "Select which addresses to include in balances and transactions. The selected address is where leftover funds are sent.",
+            color = ColorTextDim,
+            fontSize = 11.sp,
+            modifier = Modifier.padding(bottom = 15.dp)
+        )
+        
+        // Column headers
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Use", color = ColorTextDim, fontSize = 10.sp, modifier = Modifier.width(44.dp), fontWeight = FontWeight.Bold)
+            Text("Selected", color = ColorTextDim, fontSize = 10.sp, modifier = Modifier.width(56.dp), fontWeight = FontWeight.Bold)
+            Text("Address", color = ColorTextDim, fontSize = 10.sp, modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
+            Text("Balance", color = ColorTextDim, fontSize = 10.sp, modifier = Modifier.width(90.dp), fontWeight = FontWeight.Bold)
+        }
+        
+        uiState.walletAddresses.forEachIndexed { index, address ->
+            val isSelected = uiState.selectedAddresses.contains(address)
+            val isChangeAddr = uiState.changeAddress == address
+            
+            // Calculate per-address ERG balance from cached boxes
+            val addrBalance = uiState.addressBoxes[address]?.sumOf { box ->
+                (box["value"] as? Number)?.toLong() ?: 0L
+            } ?: 0L
+            val ergBalance = addrBalance.toDouble() / 1_000_000_000.0
+            
+            val borderColor = when {
+                isChangeAddr && isSelected -> ColorAccent
+                isSelected -> Color.White.copy(alpha = 0.2f)
+                else -> Color.Transparent
+            }
+            
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 3.dp)
+                    .then(
+                        if (isSelected) Modifier.border(1.dp, borderColor, RoundedCornerShape(10.dp)) else Modifier
+                    ),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isSelected) ColorInputBg else ColorInputBg.copy(alpha = 0.4f)
+                ),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Checkbox for selecting this address
+                    Checkbox(
+                        checked = isSelected,
+                        onCheckedChange = { viewModel.toggleAddress(address) },
+                        modifier = Modifier.size(36.dp),
+                        colors = CheckboxDefaults.colors(
+                            checkedColor = ColorAccent,
+                            uncheckedColor = ColorTextDim,
+                            checkmarkColor = Color.White
+                        )
+                    )
+                    
+                    // Radio button for change address (only clickable if address is selected)
+                    RadioButton(
+                        selected = isChangeAddr,
+                        onClick = { if (isSelected) viewModel.setChangeAddress(address) },
+                        modifier = Modifier.size(36.dp),
+                        enabled = isSelected,
+                        colors = RadioButtonDefaults.colors(
+                            selectedColor = ColorAccent,
+                            unselectedColor = ColorTextDim,
+                            disabledSelectedColor = ColorTextDim,
+                            disabledUnselectedColor = ColorTextDim.copy(alpha = 0.3f)
+                        )
+                    )
+                    
+                    // Address info
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable {
+                                clipboardManager.setText(AnnotatedString(address))
+                            }
+                            .padding(horizontal = 4.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "${address.take(6)}...${address.takeLast(6)}",
+                                color = if (isSelected) Color.White else ColorTextDim,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            if (index == 0) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = "PRIMARY",
+                                    color = ColorAccent,
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                        Text(
+                            text = "m/44'/429'/0'/0/$index",
+                            color = ColorTextDim.copy(alpha = 0.6f),
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                    
+                    // ERG Balance
+                    Text(
+                        text = if (ergBalance > 0) SwapViewModel.formatErg(ergBalance) else "0",
+                        color = if (ergBalance > 0 && isSelected) Color.White else ColorTextDim,
+                        fontSize = 12.sp,
+                        fontWeight = if (ergBalance > 0) FontWeight.Bold else FontWeight.Normal,
+                        modifier = Modifier.width(70.dp)
+                    )
+                    
+                    // Delete button (not for primary address)
+                    if (index > 0) {
+                        IconButton(
+                            onClick = {
+                                deleteBalance = ergBalance
+                                addressToDelete = address
+                            },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Text(
+                                text = "×",
+                                color = ColorTextDim.copy(alpha = 0.5f),
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    } else {
+                        Spacer(Modifier.width(28.dp))
+                    }
+                }
+            }
+        }
+        
+        // Summary + add button
+        Spacer(Modifier.height(15.dp))
+        val totalSelected = uiState.selectedAddresses.size
+        val totalAddresses = uiState.walletAddresses.size
+        
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "$totalSelected of $totalAddresses addresses selected",
+                color = ColorTextDim,
+                fontSize = 12.sp
+            )
+            
+            Button(
+                onClick = { viewModel.deriveMoreAddresses(1) },
+                enabled = !uiState.isScanningAddresses,
+                modifier = Modifier.height(32.dp),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = ColorAccent),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+            ) {
+                if (uiState.isScanningAddresses) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text(
+                        text = "+ Add Address",
+                        color = ColorBg,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+    
+    // Delete confirmation dialog
+    addressToDelete?.let { addr ->
+        val truncAddr = if (addr.length > 20) "${addr.take(8)}...${addr.takeLast(8)}" else addr
+        AlertDialog(
+            onDismissRequest = { addressToDelete = null },
+            containerColor = ColorCard,
+            title = {
+                Text("Remove Address?", color = Color.White, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column {
+                    Text(
+                        text = truncAddr,
+                        color = ColorTextDim,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    if (deleteBalance > 0) {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = "⚠ This address holds ${SwapViewModel.formatErg(deleteBalance)} ERG. Make sure to move funds before removing.",
+                            color = Color(0xFFFF9800),
+                            fontSize = 13.sp
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "You can always add it back later.",
+                        color = ColorTextDim,
+                        fontSize = 12.sp
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.removeAddress(addr)
+                        addressToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF5252))
+                ) {
+                    Text("Remove", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { addressToDelete = null }) {
+                    Text("Cancel", color = ColorTextDim)
+                }
+            }
+        )
     }
 }

@@ -162,23 +162,12 @@ fun ReviewTxScreen(
 
             if (showSummary) {
                 item {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(ColorInputBg, RoundedCornerShape(10.dp))
-                            .padding(15.dp)
-                    ) {
-                        Text("CONTRACT (AMM POOL)", color = ColorAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        Text("Sending: ${params.buyAmount} ${params.buyToken}", color = Color.White, fontSize = 13.sp)
-                        Text("Receiving: ${params.payAmount} ${params.payToken}", color = Color.White, fontSize = 13.sp)
-                        
-                        Spacer(Modifier.height(10.dp))
-                        
-                        Text("USER WALLET", color = ColorBlue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        Text("Sending: ${params.payAmount} ${params.payToken}", color = Color.White, fontSize = 13.sp)
-                        Text("Sending: ${String.format("%.5f", params.minerFee + params.serviceFee)} ERG (Fee)", color = Color.White, fontSize = 13.sp)
-                        Text("Receiving: ${params.buyAmount} ${params.buyToken}", color = Color.White, fontSize = 13.sp)
-                    }
+                    TransactionAddressBreakdown(
+                        txData = uiState.preparedTxData,
+                        viewModel = viewModel,
+
+                        serviceFee = params.serviceFee
+                    )
                     Spacer(Modifier.height(10.dp))
                 }
             }
@@ -419,5 +408,221 @@ fun ReviewTxScreen(
                 }
             }
         )
+    }
+}
+
+/**
+ * Dynamically parses the prepared transaction data to show per-address net changes.
+ * Labels addresses as: YOUR WALLET, CONTRACT, APP FEE, or EXTERNAL.
+ */
+@Composable
+fun TransactionAddressBreakdown(
+    txData: Map<String, Any>?,
+    viewModel: SwapViewModel,
+    serviceFee: Double
+) {
+    if (txData == null) {
+        Text("No transaction data available", color = ColorTextDim, fontSize = 12.sp)
+        return
+    }
+    
+    val uiState by viewModel.uiState.collectAsState()
+    
+    // Decode the app fee address for labeling
+    val appFeeAddress = remember { viewModel.getNodeAuthLink() }
+    
+    // Collect all user wallet addresses
+    val userAddresses = remember(uiState.walletAddresses, uiState.selectedAddress) {
+        val addrs = mutableSetOf<String>()
+        addrs.addAll(uiState.walletAddresses)
+        if (uiState.selectedAddress.isNotEmpty()) addrs.add(uiState.selectedAddress)
+        if (uiState.changeAddress.isNotEmpty()) addrs.add(uiState.changeAddress)
+        addrs
+    }
+    
+    // Known contract addresses
+    val knownProtocols = com.piggytrade.piggytrade.protocol.NetworkConfig.KNOWN_PROTOCOLS
+    
+    // Parse inputs and outputs
+    @Suppress("UNCHECKED_CAST")
+    val inputBoxes = txData["input_boxes"] as? List<Map<String, Any>> ?: emptyList()
+    @Suppress("UNCHECKED_CAST")
+    val requests = txData["requests"] as? List<Map<String, Any>> ?: emptyList()
+
+    
+    data class AddressFlow(
+        val address: String,
+        var inputErg: Long = 0L,
+        var outputErg: Long = 0L,
+        val inputTokens: MutableMap<String, Long> = mutableMapOf(),
+        val outputTokens: MutableMap<String, Long> = mutableMapOf()
+    )
+    
+    val addressFlows = remember(txData) {
+        val flows = mutableMapOf<String, AddressFlow>()
+        
+        // Process inputs (what each address is spending)
+        for (box in inputBoxes) {
+            val addr = box["address"] as? String ?: continue
+            val value = (box["value"] as? Number)?.toLong() ?: 0L
+            val flow = flows.getOrPut(addr) { AddressFlow(addr) }
+            flow.inputErg += value
+            @Suppress("UNCHECKED_CAST")
+            val assets = box["assets"] as? List<Map<String, Any>> ?: emptyList()
+            for (asset in assets) {
+                val tid = asset["tokenId"] as? String ?: continue
+                val amt = (asset["amount"] as? Number)?.toLong() ?: 0L
+                flow.inputTokens[tid] = flow.inputTokens.getOrDefault(tid, 0L) + amt
+            }
+        }
+        
+        // Process outputs (what each address is receiving)
+        for (req in requests) {
+            val addr = req["address"] as? String ?: continue
+            val value = (req["value"] as? Number)?.toLong() ?: 0L
+            val flow = flows.getOrPut(addr) { AddressFlow(addr) }
+            flow.outputErg += value
+            @Suppress("UNCHECKED_CAST")
+            val assets = req["assets"] as? List<Map<String, Any>> ?: emptyList()
+            for (asset in assets) {
+                val tid = asset["tokenId"] as? String ?: continue
+                val amt = (asset["amount"] as? Number)?.toLong() ?: 0L
+                flow.outputTokens[tid] = flow.outputTokens.getOrDefault(tid, 0L) + amt
+            }
+        }
+        
+        flows.values.toList()
+    }
+    
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(ColorInputBg, RoundedCornerShape(10.dp))
+            .padding(15.dp)
+    ) {
+        // Merge all user wallet flows into a single combined entry
+        val userFlows = addressFlows.filter { userAddresses.contains(it.address) }
+        val nonUserFlows = addressFlows.filter { !userAddresses.contains(it.address) }
+        
+        data class CombinedFlow(
+            val label: String,
+            val labelColor: Color,
+            val truncAddresses: List<String>,
+            val netErg: Long,
+            val netTokens: Map<String, Long>
+        )
+        
+        val displayFlows = mutableListOf<CombinedFlow>()
+        
+        // Combine all user wallet flows into one
+        if (userFlows.isNotEmpty()) {
+            val totalNetErg = userFlows.sumOf { it.outputErg - it.inputErg }
+            val combinedTokens = mutableMapOf<String, Long>()
+            for (flow in userFlows) {
+                val allTids = (flow.inputTokens.keys + flow.outputTokens.keys).distinct()
+                for (tid in allTids) {
+                    val net = (flow.outputTokens[tid] ?: 0L) - (flow.inputTokens[tid] ?: 0L)
+                    combinedTokens[tid] = (combinedTokens[tid] ?: 0L) + net
+                }
+            }
+            val walletLabel = if (userFlows.size > 1) "YOUR WALLET (Combined)" else "YOUR WALLET"
+            val truncAddrs = userFlows.map { f ->
+                if (f.address.length > 20) "${f.address.take(8)}...${f.address.takeLast(8)}" else f.address
+            }
+            displayFlows.add(CombinedFlow(walletLabel, ColorBlue, truncAddrs, totalNetErg, combinedTokens))
+        }
+        
+        // Add non-user flows individually
+        for (flow in nonUserFlows) {
+            val protocolName = knownProtocols[flow.address]
+            val isAppFee = flow.address == appFeeAddress
+            val label = when {
+                protocolName != null -> "CONTRACT — $protocolName"
+                isAppFee -> "APP FEE"
+                else -> "EXTERNAL"
+            }
+            val labelColor = when {
+                protocolName != null -> ColorAccent
+                isAppFee -> Color(0xFFFF9800)
+                else -> ColorTextDim
+            }
+            val netErg = flow.outputErg - flow.inputErg
+            val netTokens = mutableMapOf<String, Long>()
+            val allTids = (flow.inputTokens.keys + flow.outputTokens.keys).distinct()
+            for (tid in allTids) {
+                val net = (flow.outputTokens[tid] ?: 0L) - (flow.inputTokens[tid] ?: 0L)
+                if (net != 0L) netTokens[tid] = net
+            }
+            val truncAddr = if (flow.address.length > 20) "${flow.address.take(8)}...${flow.address.takeLast(8)}" else flow.address
+            displayFlows.add(CombinedFlow(label, labelColor, listOf(truncAddr), netErg, netTokens))
+        }
+        
+        // Sort: user wallet first, then contracts, then app fee, then external
+        val sortedDisplayFlows = displayFlows.sortedBy { flow ->
+            when {
+                flow.labelColor == ColorBlue -> 0
+                flow.label.startsWith("CONTRACT") -> 1
+                flow.label == "APP FEE" -> 2
+                else -> 3
+            }
+        }
+        
+        for ((index, flow) in sortedDisplayFlows.withIndex()) {
+            if (index > 0) {
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = Color.White.copy(alpha = 0.1f), thickness = 1.dp)
+                Spacer(Modifier.height(8.dp))
+            }
+            
+            // Label
+            Text(flow.label, color = flow.labelColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            
+            // Truncated address(es)
+            for (addr in flow.truncAddresses) {
+                Text(addr, color = ColorTextDim.copy(alpha = 0.6f), fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+            }
+            
+            Spacer(Modifier.height(4.dp))
+            
+            // Net ERG change
+            if (flow.netErg != 0L) {
+                val ergVal = flow.netErg.toDouble() / 1_000_000_000.0
+                val prefix = if (flow.netErg > 0) "+" else ""
+                val ergColor = if (flow.netErg > 0) Color(0xFF4CAF50) else Color(0xFFFF5252)
+                Text(
+                    text = "${prefix}${SwapViewModel.formatErg(ergVal)} ERG",
+                    color = ergColor,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            
+            // Net token changes
+            for ((tid, netToken) in flow.netTokens) {
+                if (netToken != 0L) {
+                    val tokenName = viewModel.getTokenName(tid)
+                    val dec = viewModel.getTokenDecimals(tid)
+                    val displayAmt = if (dec > 0) {
+                        netToken.toDouble() / Math.pow(10.0, dec.toDouble())
+                    } else netToken.toDouble()
+                    
+                    val prefix = if (netToken > 0) "+" else ""
+                    val tokenColor = if (netToken > 0) Color(0xFF4CAF50) else Color(0xFFFF5252)
+                    
+                    val formatted = if (dec > 0) {
+                        String.format("%.${dec}f", displayAmt).trimEnd('0').trimEnd('.')
+                    } else {
+                        netToken.toString()
+                    }
+                    
+                    Text(
+                        text = "$prefix$formatted $tokenName",
+                        color = tokenColor,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+        
     }
 }

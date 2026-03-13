@@ -87,6 +87,13 @@ data class SwapState(
     val allowHttpNodes: Boolean = false,
     val activeTab: String = "dex", // "dex", "wallet", "bank"
 
+    // ─── MULTI-ADDRESS STATE ─────────────────────────────────────────────────
+    val walletAddresses: List<String> = emptyList(),         // All derived addresses for current wallet
+    val selectedAddresses: Set<String> = emptySet(),          // Enabled addresses (checkboxes)
+    val changeAddress: String = "",                            // Address for receiving change
+    val addressBoxes: Map<String, List<Map<String, Any>>> = emptyMap(), // Per-address UTXOs
+    val isScanningAddresses: Boolean = false,                 // True while scanning derivation paths
+
     // ─── BANK STATE (Protocol-Agnostic) ──────────────────────────────────────
     val activeProtocolId: String = "",
     val bankAmount: String = "",
@@ -218,7 +225,15 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         val initialWalletKey = initialWalletDisplay.replace(" (Ergopay)", "")
-        val initialAddress = (savedWallets[initialWalletKey] as? Map<String, Any>)?.get("address") as? String ?: ""
+        val initialWalletData = savedWallets[initialWalletKey] as? Map<String, Any>
+        val initialAddress = initialWalletData?.get("address") as? String ?: ""
+        
+        // Load multi-address info for initial wallet
+        @Suppress("UNCHECKED_CAST")
+        val initialAddresses = (initialWalletData?.get("addresses") as? List<String>) ?: if (initialAddress.isNotEmpty()) listOf(initialAddress) else emptyList()
+        val (initSelectedAddrs, initChangeAddr) = preferenceManager.loadWalletAddressConfig(initialWalletKey)
+        val initialSelected = if (initSelectedAddrs.isNotEmpty()) initSelectedAddrs else if (initialAddress.isNotEmpty()) setOf(initialAddress) else emptySet()
+        val initialChange = if (initChangeAddr.isNotEmpty()) initChangeAddr else initialAddress
 
         MutableStateFlow(
             SwapState(
@@ -229,6 +244,9 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 wallets = displayWallets,
                 selectedWallet = initialWalletDisplay,
                 selectedAddress = initialAddress,
+                walletAddresses = initialAddresses,
+                selectedAddresses = initialSelected,
+                changeAddress = initialChange,
                 favorites = favorites,
                 includeUnconfirmed = (preferenceManager.loadSettings()["include_unconfirmed"] as? Boolean) ?: true,
                 numFavorites = numFavs,
@@ -528,17 +546,44 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
     // ─── WALLET OPERATIONS ───────────────────────────────────────────────────
 
     fun fetchWalletBalances() {
-        val address = _uiState.value.selectedAddress
-        if (address.isEmpty()) return
+        val selectedAddrs = _uiState.value.selectedAddresses
+        val fallbackAddress = _uiState.value.selectedAddress
+        
+        // Determine which addresses to fetch
+        val addressesToFetch = if (selectedAddrs.isNotEmpty()) selectedAddrs else {
+            if (fallbackAddress.isEmpty()) return
+            setOf(fallbackAddress)
+        }
 
         _uiState.value = _uiState.value.copy(isLoadingWallet = true)
         viewModelScope.launch {
             try {
                 val client = nodeClient ?: return@launch
-                val (tokens, nanoerg, _) = client.getMyAssets(address, checkMempool = _uiState.value.includeUnconfirmed)
+                val checkMempool = _uiState.value.includeUnconfirmed
+                
+                val tokens: Map<String, Long>
+                val nanoerg: Long
+                val addressBoxMap: Map<String, List<Map<String, Any>>>
+
+                if (addressesToFetch.size == 1) {
+                    // Single address — use existing efficient path
+                    val addr = addressesToFetch.first()
+                    val (t, n, boxes) = client.getMyAssets(addr, checkMempool)
+                    tokens = t
+                    nanoerg = n
+                    addressBoxMap = mapOf(addr to boxes)
+                } else {
+                    // Multi-address — aggregate across all selected addresses
+                    val (t, n, boxMap) = client.getMyAssetsMulti(addressesToFetch, checkMempool)
+                    tokens = t
+                    nanoerg = n
+                    addressBoxMap = boxMap
+                }
+
                 _uiState.value = _uiState.value.copy(
                     walletErgBalance = nanoerg.toDouble() / 1_000_000_000.0,
                     walletTokens = tokens,
+                    addressBoxes = addressBoxMap,
                     isLoadingWallet = false
                 )
                 updateBalances()
@@ -583,6 +628,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
 
             var isErgoPayType = false
             var derivedAddress = ""
+            var allAddresses = listOf<String>()
 
             if (mnemonic == null && address != null) {
                 wallets[name] = mapOf(
@@ -592,20 +638,60 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 isErgoPayType = true
                 derivedAddress = address
+                allAddresses = listOf(address)
             } else if (mnemonic != null) {
-                // Derive the real address using ergo-lib-jni (BIP44 EIP-3 path)
-                derivedAddress = try {
-                    org.ergoplatform.wallet.jni.WalletLib.mnemonicToAddress(
-                        mnemonic, "", 0, true
-                    )
-                } catch (e: Exception) {
-                    android.util.Log.e("SaveWallet", "Address derivation failed: ${e.message}")
-                    ""
+                // Show scanning indicator
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(isScanningAddresses = true)
                 }
+
+                // Derive addresses for indices 0..19, stop after 5 consecutive empty
+                val MAX_SCAN = 20
+                val GAP_LIMIT = 5
+                val derived = mutableListOf<String>()
+                var consecutiveEmpty = 0
+                val client = nodeClient
+
+                for (i in 0 until MAX_SCAN) {
+                    val addr = try {
+                        org.ergoplatform.wallet.jni.WalletLib.mnemonicToAddress(mnemonic, "", i, true)
+                    } catch (e: Exception) {
+                        if (BuildConfig.DEBUG) Log.e("SaveWallet", "Derivation failed at index $i: ${e.message}")
+                        break
+                    }
+                    derived.add(addr)
+
+                    // Check if this address has any UTXOs on-chain
+                    if (client != null && i > 0) {
+                        try {
+                            val (_, nanoerg, boxes) = client.getMyAssets(addr, false)
+                            if (boxes.isEmpty() && nanoerg == 0L) {
+                                consecutiveEmpty++
+                            } else {
+                                consecutiveEmpty = 0
+                                if (BuildConfig.DEBUG) Log.d("SaveWallet", "Active address found at index $i: $addr")
+                            }
+                        } catch (e: Exception) {
+                            consecutiveEmpty++
+                        }
+                    } else {
+                        // Index 0 is always included, don't count toward gap
+                        consecutiveEmpty = 0
+                    }
+
+                    if (consecutiveEmpty >= GAP_LIMIT) {
+                        if (BuildConfig.DEBUG) Log.d("SaveWallet", "Gap limit reached at index $i, stopping scan")
+                        break
+                    }
+                }
+
+                derivedAddress = derived.firstOrNull() ?: ""
+                allAddresses = derived
 
                 // Encrypt the mnemonic
                 val walletData = mutableMapOf<String, Any>(
                     "address" to derivedAddress,
+                    "addresses" to allAddresses,
                     "type" to "mnemonic",
                     "use_legacy" to useLegacy,
                     "kdf" to "scrypt"
@@ -629,6 +715,13 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 wallets[name] = walletData
+
+                // Default address config: only primary address selected, primary as change
+                preferenceManager.saveWalletAddressConfig(
+                    name,
+                    setOf(derivedAddress),
+                    derivedAddress
+                )
             }
 
             preferenceManager.saveWallets(wallets)
@@ -648,7 +741,11 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.value = current.copy(
                     wallets = displayWallets,
                     selectedWallet = newDisplayLabel,
-                    selectedAddress = finalAddress
+                    selectedAddress = finalAddress,
+                    walletAddresses = allAddresses,
+                    selectedAddresses = setOf(finalAddress),
+                    changeAddress = finalAddress,
+                    isScanningAddresses = false
                 )
                 preferenceManager.selectedWallet = name
                 
@@ -718,10 +815,24 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
             "wallet" -> {
                 val wallets = preferenceManager.loadWallets()
                 val internalKey = item.replace(" (Ergopay)", "")
-                val addr = (wallets[internalKey] as? Map<String, Any>)?.get("address") as? String ?: ""
+                val walletData = wallets[internalKey] as? Map<String, Any>
+                val addr = walletData?.get("address") as? String ?: ""
+                
+                // Load multi-address info
+                @Suppress("UNCHECKED_CAST")
+                val allAddresses = (walletData?.get("addresses") as? List<String>) ?: if (addr.isNotEmpty()) listOf(addr) else emptyList()
+                
+                // Load persisted address selection config
+                val (savedSelected, savedChange) = preferenceManager.loadWalletAddressConfig(internalKey)
+                val selectedAddrs = if (savedSelected.isNotEmpty()) savedSelected else if (addr.isNotEmpty()) setOf(addr) else emptySet()
+                val changeAddr = if (savedChange.isNotEmpty()) savedChange else addr
+
                 _uiState.value = current.copy(
                     selectedWallet = item,
-                    selectedAddress = addr
+                    selectedAddress = addr,
+                    walletAddresses = allAddresses,
+                    selectedAddresses = selectedAddrs,
+                    changeAddress = changeAddr
                 )
                 preferenceManager.selectedWallet = internalKey
                 fetchWalletBalances()
@@ -735,6 +846,176 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    /**
+     * Toggle an address on/off in the selected set for the current wallet.
+     * At least one address must remain selected.
+     */
+    fun toggleAddress(address: String) {
+        val current = _uiState.value
+        val newSelected = current.selectedAddresses.toMutableSet()
+        
+        if (newSelected.contains(address)) {
+            if (newSelected.size > 1) {
+                newSelected.remove(address)
+                // If we removed the change address, default the change to the first remaining selected
+                var newChange = current.changeAddress
+                if (newChange == address) {
+                    newChange = newSelected.first()
+                }
+                _uiState.value = current.copy(selectedAddresses = newSelected, changeAddress = newChange)
+            }
+            // Don't allow deselecting the last address
+        } else {
+            newSelected.add(address)
+            _uiState.value = current.copy(selectedAddresses = newSelected)
+        }
+        
+        // Persist and refresh
+        val walletKey = current.selectedWallet.replace(" (Ergopay)", "")
+        preferenceManager.saveWalletAddressConfig(walletKey, _uiState.value.selectedAddresses, _uiState.value.changeAddress)
+        fetchWalletBalances()
+        fetchTransactionHistory()
+    }
+
+    /**
+     * Set which address receives change outputs.
+     */
+    fun setChangeAddress(address: String) {
+        val current = _uiState.value
+        _uiState.value = current.copy(changeAddress = address)
+        val walletKey = current.selectedWallet.replace(" (Ergopay)", "")
+        preferenceManager.saveWalletAddressConfig(walletKey, current.selectedAddresses, address)
+    }
+
+    /**
+     * Derive additional addresses from the current wallet's mnemonic.
+     * Fills gaps first (re-adds removed addresses in derivation order), 
+     * then extends to new indices. This gives the most intuitive UX.
+     */
+    fun deriveMoreAddresses(count: Int = 1) {
+        val current = _uiState.value
+        val walletKey = current.selectedWallet.replace(" (Ergopay)", "").trim()
+        val wallets = preferenceManager.loadWallets().toMutableMap()
+        @Suppress("UNCHECKED_CAST")
+        val walletData = (wallets[walletKey] as? Map<String, Any>)?.toMutableMap() ?: return
+        if (walletData["type"] != "mnemonic") return
+
+        val existingAddresses = current.walletAddresses.toSet()
+
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                _uiState.value = _uiState.value.copy(isScanningAddresses = true)
+            }
+
+            try {
+                // Decrypt mnemonic
+                val mnemonic = if (walletData["use_biometrics"] == true) {
+                    val enc = walletData["mnemonic_encrypted_device"] as? String ?: return@launch
+                    com.piggytrade.piggytrade.crypto.DeviceEncryption.decrypt(enc)
+                } else {
+                    val salt = walletData["salt"] as? String
+                    val token = walletData["token"] as? String
+                    if (salt != null && token != null) {
+                        // Can't decrypt without user's password
+                        null
+                    } else null
+                }
+
+                if (mnemonic == null) {
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        _uiState.value = _uiState.value.copy(isScanningAddresses = false)
+                    }
+                    return@launch
+                }
+
+                // Iterate derivation indices 0..MAX, find the first `count` addresses
+                // not already in the list. This fills gaps from removals first.
+                val MAX_SCAN = 50
+                val newAddresses = mutableListOf<String>()
+                for (i in 0 until MAX_SCAN) {
+                    if (newAddresses.size >= count) break
+                    val addr = try {
+                        org.ergoplatform.wallet.jni.WalletLib.mnemonicToAddress(mnemonic, "", i, true)
+                    } catch (e: Exception) {
+                        break
+                    }
+                    if (!existingAddresses.contains(addr)) {
+                        newAddresses.add(addr)
+                    }
+                }
+
+                val allAddresses = current.walletAddresses + newAddresses
+
+                // Update wallet data with new addresses list
+                walletData["addresses"] = allAddresses
+                wallets[walletKey] = walletData
+                preferenceManager.saveWallets(wallets)
+
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(
+                        walletAddresses = allAddresses,
+                        isScanningAddresses = false
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to derive more addresses", e)
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(isScanningAddresses = false)
+                }
+            }
+        }
+    }
+
+    /**
+     * Remove a derived address from the wallet.
+     * Cannot remove the primary (index 0) address or the last remaining address.
+     */
+    fun removeAddress(address: String) {
+        val current = _uiState.value
+        val walletKey = current.selectedWallet.replace(" (Ergopay)", "").trim()
+        
+        // Don't allow removing primary address or last address
+        if (current.walletAddresses.size <= 1) return
+        if (current.walletAddresses.firstOrNull() == address) return
+        
+        val newAddresses = current.walletAddresses.filter { it != address }
+        val newSelected = current.selectedAddresses.toMutableSet()
+        newSelected.remove(address)
+        if (newSelected.isEmpty()) newSelected.add(newAddresses.first())
+        
+        val newChange = if (current.changeAddress == address) {
+            newSelected.first()
+        } else {
+            current.changeAddress
+        }
+        
+        // Update wallet data
+        val wallets = preferenceManager.loadWallets().toMutableMap()
+        @Suppress("UNCHECKED_CAST")
+        val walletData = (wallets[walletKey] as? Map<String, Any>)?.toMutableMap()
+        if (walletData != null) {
+            walletData["addresses"] = newAddresses
+            wallets[walletKey] = walletData
+            preferenceManager.saveWallets(wallets)
+        }
+        
+        // Update address config
+        preferenceManager.saveWalletAddressConfig(walletKey, newSelected, newChange)
+        
+        // Update UI state
+        val newBoxes = current.addressBoxes.toMutableMap()
+        newBoxes.remove(address)
+        
+        _uiState.value = current.copy(
+            walletAddresses = newAddresses,
+            selectedAddresses = newSelected,
+            changeAddress = newChange,
+            addressBoxes = newBoxes
+        )
+        
+        fetchWalletBalances()
     }
 
     fun setActiveTab(tab: String) {
@@ -868,7 +1149,9 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val miningFeeNano = (state.minerFee * 1_000_000_000.0).toLong()
 
-                val rawTxDict = protocol.buildTransaction(client, amount, address, miningFeeNano, state.includeUnconfirmed)
+                val changeAddr = state.changeAddress.ifEmpty { address }
+
+                val rawTxDict = protocol.buildTransaction(client, amount, address, miningFeeNano, state.includeUnconfirmed, changeAddress = changeAddr, userAddresses = state.selectedAddresses)
 
                 // Extract internal metadata from txDict before stripping
                 val buildHeight = (rawTxDict["_buildHeight"] as? Number)?.toInt() ?: 0
@@ -985,7 +1268,9 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 val buildHeaders = client.api.getLastHeaders(10)
                 val buildHeadersJson = com.google.gson.Gson().toJson(buildHeaders)
 
-                val txDict = protocol.buildRedeemTransaction(client, amount, address, miningFeeNano, state.includeUnconfirmed)
+                val changeAddr = state.changeAddress.ifEmpty { address }
+
+                val txDict = protocol.buildRedeemTransaction(client, amount, address, miningFeeNano, state.includeUnconfirmed, changeAddress = changeAddr, userAddresses = state.selectedAddresses)
 
                 val isErgopayWallet = state.selectedWallet.contains("ergopay", ignoreCase = true) ||
                         state.selectedWallet.isEmpty()
@@ -1064,6 +1349,9 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         if (wallets.containsKey(rawName)) {
             wallets.remove(rawName)
             preferenceManager.saveWallets(wallets)
+            
+            // Clean up address config for deleted wallet
+            preferenceManager.saveWalletAddressConfig(rawName, emptySet(), "")
 
             val displayWallets = mutableListOf<String>()
             wallets.forEach { (wname, data) ->
@@ -1080,15 +1368,25 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 current.selectedWallet
             }
             
-            val newAddress = if (newSelectedWallet != "Select Wallet") {
-                val data = wallets[newSelectedWallet.replace(" (Ergopay)", "").trim()] as? Map<String, Any>
-                data?.get("address") as? String ?: ""
-            } else ""
+            val newWalletKey = newSelectedWallet.replace(" (Ergopay)", "").trim()
+            val newWalletData = wallets[newWalletKey] as? Map<String, Any>
+            val newAddress = newWalletData?.get("address") as? String ?: ""
+            
+            // Load multi-address info for new wallet
+            @Suppress("UNCHECKED_CAST")
+            val newAddresses = (newWalletData?.get("addresses") as? List<String>) ?: if (newAddress.isNotEmpty()) listOf(newAddress) else emptyList()
+            val (newSelected, newChange) = preferenceManager.loadWalletAddressConfig(newWalletKey)
+            val selectedAddrs = if (newSelected.isNotEmpty()) newSelected else if (newAddress.isNotEmpty()) setOf(newAddress) else emptySet()
+            val changeAddr = if (newChange.isNotEmpty()) newChange else newAddress
 
             _uiState.value = current.copy(
                 wallets = displayWallets,
                 selectedWallet = newSelectedWallet,
                 selectedAddress = newAddress,
+                walletAddresses = newAddresses,
+                selectedAddresses = selectedAddrs,
+                changeAddress = changeAddr,
+                addressBoxes = emptyMap(),
                 walletErgBalance = 0.0,
                 walletTokens = emptyMap()
             )
@@ -1208,6 +1506,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun getTokenName(tokenId: String) = tokenRepository.getTokenName(tokenId)
+    fun getTokenDecimals(tokenId: String) = tokenRepository.getTokenDecimals(tokenId)
     fun getVerificationStatus(tokenKey: String) = tokenRepository.getVerificationStatus(tokenKey)
     fun isWhitelisted(tokenKey: String): Boolean {
         val pid = tokenRepository.tokens[tokenKey]?.get("pid") as? String ?: ""
@@ -1304,7 +1603,8 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 val client = nodeClient ?: throw Exception("Node client not initialized")
             val currentHeight = try { client.getHeight() } catch (e: Exception) { 0 }
             
-            val txBuilder = com.piggytrade.piggytrade.blockchain.TxBuilder(client, addr)
+            val changeAddr = current.changeAddress.ifEmpty { addr }
+            val txBuilder = com.piggytrade.piggytrade.blockchain.TxBuilder(client, changeAddr)
             val traderLocal = Trader(client, txBuilder, tokenRepository.tokens, null)
 
             if (BuildConfig.DEBUG) Log.d(TAG, "Building transaction at height $currentHeight...")
@@ -1316,7 +1616,9 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 senderAddress = addr,
                 currentHeight = currentHeight,
                 fee = current.minerFee,
-                includeUnconfirmed = current.includeUnconfirmed
+                includeUnconfirmed = current.includeUnconfirmed,
+                changeAddress = changeAddr,
+                addressBoxes = if (current.addressBoxes.isNotEmpty()) current.addressBoxes else null
             )
                 if (BuildConfig.DEBUG) Log.i(TAG, "Successfully built transaction.")
 
@@ -1424,8 +1726,11 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                     com.google.gson.Gson().toJson(client.api.getLastHeaders(10))
                 }
 
-                // Sign
-                val signedJson = signer.signTransaction(txDict, current.selectedAddress, mnemonic, "", headersJson)
+                // Sign — always use the primary address (index 0) for key derivation.
+                // sigma-rust uses this address to find the derivation root and scan
+                // multiple indices. The change output is already baked into the tx outputs.
+                val signAddr = current.selectedAddress
+                val signedJson = signer.signTransaction(txDict, signAddr, mnemonic, "", headersJson)
                 val signedTxMap = signer.txGson.fromJson(signedJson, Map::class.java) as Map<String, Any>
 
                 val txId = try {
@@ -1771,8 +2076,16 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun fetchTransactionHistory(loadMore: Boolean = false) {
-        val address = _uiState.value.selectedAddress
-        if (address.isEmpty()) return
+        // Fetch from ALL wallet addresses, not just selected, so we see all wallet activity
+        val allAddrs = _uiState.value.walletAddresses.toSet()
+        val selectedAddrs = _uiState.value.selectedAddresses
+        val fallbackAddress = _uiState.value.selectedAddress
+        
+        val addressesToFetch = if (allAddrs.isNotEmpty()) allAddrs else if (selectedAddrs.isNotEmpty()) selectedAddrs else {
+            if (fallbackAddress.isEmpty()) return
+            setOf(fallbackAddress)
+        }
+        if (BuildConfig.DEBUG) Log.d(TAG, "fetchTransactionHistory: walletAddresses=${allAddrs.size}, selected=${selectedAddrs.size}, fetching=${addressesToFetch.size} addresses: ${addressesToFetch.map { it.take(8) }}")
 
         if (loadMore) {
             if (_uiState.value.isLoadingHistory) return
@@ -1787,44 +2100,60 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 val currentOffset = if (loadMore) _uiState.value.historyOffset else 0
                 val limit = 50
 
-                val newTrades = mutableListOf<NetworkTransaction>()
-
-                // Only fetch unconfirmed if it's the first page
-                if (currentOffset == 0) {
+                // Build ergoTree → address map for ALL wallet addresses so we can
+                // recognise inputs/outputs from any wallet address in unconfirmed txs
+                val ergoTreeToAddr = mutableMapOf<String, String>()
+                for (addr in addressesToFetch) {
                     try {
-                        val treeRes = client.api.addressToErgoTree(address)
-                        val ergoTree = (treeRes["ergoTree"] as? String) ?: (treeRes["tree"] as? String) ?: ""
-                        if (ergoTree.isNotEmpty()) {
-                            val reqBody = "\"$ergoTree\"".toRequestBody("application/json".toMediaTypeOrNull())
-                            val unconfList = client.api.getUnconfirmedTransactionsByErgoTree(
-                                offset = 0, limit = 50, ergoTree = reqBody
-                            )
-                             newTrades.addAll(parseNetworkTransactions(unconfList, address, false, ergoTree))
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed fetching unconfirmed", e)
-                    }
+                        val treeRes = client.api.addressToErgoTree(addr)
+                        val tree = (treeRes["ergoTree"] as? String) ?: (treeRes["tree"] as? String) ?: ""
+                        if (tree.isNotEmpty()) ergoTreeToAddr[tree] = addr
+                    } catch (_: Exception) { }
                 }
 
-                // Fetch Confirmed
-                try {
-                    val reqBody = "\"$address\"".toRequestBody("application/json".toMediaTypeOrNull())
-                    val confResp = client.api.getTransactionsByAddress(
-                        offset = currentOffset, limit = limit, address = reqBody
-                    )
-                    @Suppress("UNCHECKED_CAST")
-                    val confList = confResp["items"] as? List<Map<String, Any>> ?: emptyList()
-                    newTrades.addAll(parseNetworkTransactions(confList, address, true, null))
+                val newTrades = mutableListOf<NetworkTransaction>()
 
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed fetching confirmed", e)
+                for (address in addressesToFetch) {
+                    // Only fetch unconfirmed if it's the first page
+                    if (currentOffset == 0) {
+                        try {
+                            val ergoTree = ergoTreeToAddr.entries.find { it.value == address }?.key ?: ""
+                            if (ergoTree.isNotEmpty()) {
+                                val reqBody = "\"$ergoTree\"".toRequestBody("application/json".toMediaTypeOrNull())
+                                val unconfList = client.api.getUnconfirmedTransactionsByErgoTree(
+                                    offset = 0, limit = 50, ergoTree = reqBody
+                                )
+                                newTrades.addAll(parseNetworkTransactions(unconfList, addressesToFetch, false, ergoTreeToAddr))
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed fetching unconfirmed for $address", e)
+                        }
+                    }
+
+                    // Fetch Confirmed
+                    try {
+                        val reqBody = "\"$address\"".toRequestBody("application/json".toMediaTypeOrNull())
+                        val confResp = client.api.getTransactionsByAddress(
+                            offset = currentOffset, limit = limit, address = reqBody
+                        )
+                        @Suppress("UNCHECKED_CAST")
+                        val confList = confResp["items"] as? List<Map<String, Any>> ?: emptyList()
+                        if (BuildConfig.DEBUG) Log.d(TAG, "Confirmed for ${address.take(8)}: ${confList.size} txs")
+                        newTrades.addAll(parseNetworkTransactions(confList, addressesToFetch, true, ergoTreeToAddr))
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed fetching confirmed for $address", e)
+                    }
                 }
 
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
                     val currentList = if (loadMore) _uiState.value.networkTrades else emptyList()
                     
-                    // Filter out duplicates (sometimes unconfirmed gets confirmed while we page)
-                    val finalTrades = (currentList + newTrades).distinctBy { it.id }
+                    // Filter out duplicates (same tx seen from multiple addresses or unconfirmed→confirmed)
+                    // Sort: unconfirmed first, then by timestamp descending
+                    val finalTrades = (currentList + newTrades)
+                        .distinctBy { it.id }
+                        .sortedWith(compareBy<NetworkTransaction> { it.isConfirmed }.thenByDescending { it.timestamp })
+                    if (BuildConfig.DEBUG) Log.d(TAG, "Total raw=${newTrades.size}, unique=${finalTrades.size}, first=${finalTrades.firstOrNull()?.id?.take(8)}")
 
                     _uiState.value = _uiState.value.copy(
                         networkTrades = finalTrades,
@@ -1842,9 +2171,9 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun parseNetworkTransactions(
         rawList: List<Map<String, Any>>, 
-        myAddress: String, 
+        myAddresses: Set<String>, 
         isConfirmed: Boolean,
-        myErgoTree: String? = null
+        ergoTreeToAddr: Map<String, String> = emptyMap()
     ): List<NetworkTransaction> {
 
         val parsed = mutableListOf<NetworkTransaction>()
@@ -1872,13 +2201,14 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 val assets = inp["assets"] as? List<Map<String, Any>> ?: emptyList()
                 val tree = inp["ergoTree"] as? String ?: ""
 
-                if (addr.isEmpty() && myErgoTree != null && tree == myErgoTree) {
-                    addr = myAddress
+                // Resolve address from ergoTree if address is empty
+                if (addr.isEmpty() && tree.isNotEmpty()) {
+                    addr = ergoTreeToAddr[tree] ?: ""
                 }
 
                 parsedInputs.add(TxBox(boxId, value, addr, assets, tree))
 
-                if (addr == myAddress) {
+                if (addr in myAddresses) {
 
                     myErgIn += value
                     for (asset in assets) {
@@ -1902,13 +2232,14 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 val assets = outp["assets"] as? List<Map<String, Any>> ?: emptyList()
                 val tree = outp["ergoTree"] as? String ?: ""
 
-                if (addr.isEmpty() && myErgoTree != null && tree == myErgoTree) {
-                    addr = myAddress
+                // Resolve address from ergoTree if address is empty
+                if (addr.isEmpty() && tree.isNotEmpty()) {
+                    addr = ergoTreeToAddr[tree] ?: ""
                 }
 
                 parsedOutputs.add(TxBox(boxId, value, addr, assets, tree))
 
-                if (addr == myAddress) {
+                if (addr in myAddresses) {
 
                     myErgOut += value
                     for (asset in assets) {

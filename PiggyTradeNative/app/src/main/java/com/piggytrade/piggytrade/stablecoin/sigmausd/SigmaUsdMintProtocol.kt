@@ -44,7 +44,7 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
         checkMempool: Boolean
     ): EligibilityResult {
         return try {
-            val state = fetchBankState(client, senderAddress, checkMempool)
+            val state = fetchBankState(client, setOf(senderAddress), checkMempool)
             val bank = state.bank
 
             val ratio = bank.currentReserveRatio()
@@ -110,7 +110,7 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
         senderAddress: String,
         checkMempool: Boolean
     ): MintQuote {
-        val state = fetchBankState(client, senderAddress, checkMempool)
+        val state = fetchBankState(client, setOf(senderAddress), checkMempool)
         val amountRaw = (amount * SigmaUsdConfig.SIGUSD_FACTOR).toLong()
 
         val baseCost = state.bank.baseCostToMintStableCoin(amountRaw)
@@ -143,7 +143,7 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
         senderAddress: String,
         checkMempool: Boolean
     ): RedeemQuote {
-        val state = fetchBankState(client, senderAddress, checkMempool)
+        val state = fetchBankState(client, setOf(senderAddress), checkMempool)
         val amountRaw = (amount * SigmaUsdConfig.SIGUSD_FACTOR).toLong()
 
         val baseAmount = state.bank.baseAmountFromRedeemingStableCoin(amountRaw)
@@ -176,9 +176,12 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
         amount: Double,
         senderAddress: String,
         miningFee: Long,
-        checkMempool: Boolean
+        checkMempool: Boolean,
+        changeAddress: String,
+        userAddresses: Set<String>
     ): Map<String, Any> {
-        val state = fetchBankState(client, senderAddress, checkMempool)
+        val addrs = if (userAddresses.isNotEmpty()) userAddresses else setOf(senderAddress)
+        val state = fetchBankState(client, addrs, checkMempool)
         val amountRaw = (amount * SigmaUsdConfig.SIGUSD_FACTOR).toLong()
         val height = client.getHeight()
 
@@ -216,7 +219,7 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
             buildBankOutput(state, newBankValue, newBankStable, state.bankReserveTokens, newCircStable, state.circulatingReserve, height),
             // Output 1: Receipt/user box (R4=circDelta, R5=bcReserveDelta per contract)
             mapOf(
-                "address" to senderAddress,
+                "address" to changeAddress,
                 "value" to userChangeValue,
                 "assets" to userChangeAssets,
                 "registers" to mapOf(
@@ -263,9 +266,12 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
         amount: Double,
         senderAddress: String,
         miningFee: Long,
-        checkMempool: Boolean
+        checkMempool: Boolean,
+        changeAddress: String,
+        userAddresses: Set<String>
     ): Map<String, Any> {
-        val state = fetchBankState(client, senderAddress, checkMempool)
+        val addrs = if (userAddresses.isNotEmpty()) userAddresses else setOf(senderAddress)
+        val state = fetchBankState(client, addrs, checkMempool)
         val amountRaw = (amount * SigmaUsdConfig.SIGUSD_FACTOR).toLong()
         val height = client.getHeight()
 
@@ -306,7 +312,7 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
             buildBankOutput(state, newBankValue, newBankStable, state.bankReserveTokens, newCircStable, state.circulatingReserve, height),
             // Output 1: Receipt/user box (R4=circDelta negative, R5=bcReserveDelta negative per contract)
             mapOf(
-                "address" to senderAddress,
+                "address" to changeAddress,
                 "value" to userChangeValue,
                 "assets" to userChangeAssets,
                 "registers" to mapOf(
@@ -366,7 +372,7 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
     @Suppress("UNCHECKED_CAST")
     internal suspend fun fetchBankState(
         client: NodeClient,
-        senderAddress: String,
+        addresses: Set<String>,
         checkMempool: Boolean
     ): BankState {
         // Bank box
@@ -394,8 +400,14 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
         // Contract: rate = R4 / 100 (converts from per-cent to per-dollar)
         val oracleRate = oracleRateRaw / 100
 
-        // User boxes
-        val (_, userNanoErg, userBoxMaps) = client.getMyAssets(senderAddress, checkMempool)
+        // User boxes — fetch from all selected addresses
+        var userNanoErg = 0L
+        val userBoxMaps = mutableListOf<Map<String, Any>>()
+        for (addr in addresses) {
+            val (_, n, boxes) = client.getMyAssets(addr, checkMempool)
+            userNanoErg += n
+            userBoxMaps.addAll(boxes)
+        }
         val userBoxIds = userBoxMaps.mapNotNull { it["boxId"] as? String }
 
         val bank = SigmaUsdBank(

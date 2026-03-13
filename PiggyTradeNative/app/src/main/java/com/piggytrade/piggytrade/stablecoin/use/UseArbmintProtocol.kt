@@ -44,7 +44,7 @@ class UseArbmintProtocol : StablecoinProtocol {
         checkMempool: Boolean
     ): EligibilityResult {
         return try {
-            val state = fetchProtocolState(client, senderAddress, checkMempool)
+            val state = fetchProtocolState(client, setOf(senderAddress), checkMempool)
             val height = client.getHeight()
 
             val rates = calculateRates(state.oracleRateWhole)
@@ -137,7 +137,7 @@ class UseArbmintProtocol : StablecoinProtocol {
         senderAddress: String,
         checkMempool: Boolean
     ): MintQuote {
-        val state = fetchProtocolState(client, senderAddress, checkMempool)
+        val state = fetchProtocolState(client, setOf(senderAddress), checkMempool)
         val amountUseInt = (amount * UseConfig.USE_DECIMALS).toLong()
         val rates = calculateRates(state.oracleRateWhole)
 
@@ -173,9 +173,12 @@ class UseArbmintProtocol : StablecoinProtocol {
         amount: Double,
         senderAddress: String,
         miningFee: Long,
-        checkMempool: Boolean
+        checkMempool: Boolean,
+        changeAddress: String,
+        userAddresses: Set<String>
     ): Map<String, Any> {
-        val state = fetchProtocolState(client, senderAddress, checkMempool)
+        val addrs = if (userAddresses.isNotEmpty()) userAddresses else setOf(senderAddress)
+        val state = fetchProtocolState(client, addrs, checkMempool)
         val amountUseInt = (amount * UseConfig.USE_DECIMALS).toLong()
 
         // Same height fix as UseFreemintProtocol — use max(fullHeight, lastHeaders[0])
@@ -278,7 +281,7 @@ class UseArbmintProtocol : StablecoinProtocol {
                 }
 
                 mapOf(
-                    "address" to senderAddress,
+                    "address" to changeAddress,
                     "value" to userChangeValue,
                     "assets" to userChangeAssets,
                     "registers" to emptyMap<String, Any>(),
@@ -390,7 +393,7 @@ class UseArbmintProtocol : StablecoinProtocol {
     @Suppress("UNCHECKED_CAST")
     private suspend fun fetchProtocolState(
         client: NodeClient,
-        senderAddress: String,
+        addresses: Set<String>,
         checkMempool: Boolean
     ): ProtocolState {
         // Arbmint box
@@ -442,8 +445,14 @@ class UseArbmintProtocol : StablecoinProtocol {
         val buybackDortAmount = buybackAssets.firstOrNull { it["tokenId"] == UseConfig.BUYBACK_REWARD_NFT }
             ?.let { (it["amount"] as? Number)?.toLong() } ?: 1L
 
-        // User boxes — extract string IDs from the box maps
-        val (_, userNanoErg, userBoxMaps) = client.getMyAssets(senderAddress, checkMempool)
+        // User boxes — fetch from all selected addresses
+        var userNanoErg = 0L
+        val userBoxMaps = mutableListOf<Map<String, Any>>()
+        for (addr in addresses) {
+            val (_, n, boxes) = client.getMyAssets(addr, checkMempool)
+            userNanoErg += n
+            userBoxMaps.addAll(boxes)
+        }
         val userBoxIds = userBoxMaps.mapNotNull { it["boxId"] as? String }
 
         return ProtocolState(

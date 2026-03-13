@@ -40,7 +40,7 @@ class UseFreemintProtocol : StablecoinProtocol {
         checkMempool: Boolean
     ): EligibilityResult {
         return try {
-            val state = fetchProtocolState(client, senderAddress, checkMempool)
+            val state = fetchProtocolState(client, setOf(senderAddress), checkMempool)
             val height = client.getHeight()
 
             val (available, resetHeight) = resolveCapacity(state, height)
@@ -114,7 +114,7 @@ class UseFreemintProtocol : StablecoinProtocol {
         senderAddress: String,
         checkMempool: Boolean
     ): MintQuote {
-        val state = fetchProtocolState(client, senderAddress, checkMempool)
+        val state = fetchProtocolState(client, setOf(senderAddress), checkMempool)
         val amountUseInt = (amount * UseConfig.USE_DECIMALS).toLong()
 
         // state.oracleRate is raw R4 (nanoErgs per USD).
@@ -154,9 +154,12 @@ class UseFreemintProtocol : StablecoinProtocol {
         amount: Double,
         senderAddress: String,
         miningFee: Long,
-        checkMempool: Boolean
+        checkMempool: Boolean,
+        changeAddress: String,
+        userAddresses: Set<String>
     ): Map<String, Any> {
-        val state = fetchProtocolState(client, senderAddress, checkMempool)
+        val addrs = if (userAddresses.isNotEmpty()) userAddresses else setOf(senderAddress)
+        val state = fetchProtocolState(client, addrs, checkMempool)
         val amountUseInt = (amount * UseConfig.USE_DECIMALS).toLong()
 
         // CRITICAL: the node evaluates scripts using its current fullHeight (from /info).
@@ -267,7 +270,7 @@ class UseFreemintProtocol : StablecoinProtocol {
                 }
 
                 mapOf(
-                    "address" to senderAddress,
+                    "address" to changeAddress,
                     "value" to userChangeValue,
                     "assets" to userChangeAssets,
                     "registers" to emptyMap<String, Any>(),
@@ -365,7 +368,7 @@ class UseFreemintProtocol : StablecoinProtocol {
     @Suppress("UNCHECKED_CAST")
     private suspend fun fetchProtocolState(
         client: NodeClient,
-        senderAddress: String,
+        addresses: Set<String>,
         checkMempool: Boolean
     ): ProtocolState {
         // Freemint box
@@ -414,8 +417,14 @@ class UseFreemintProtocol : StablecoinProtocol {
         val buybackDortAmount = buybackAssets.firstOrNull { it["tokenId"] == UseConfig.BUYBACK_REWARD_NFT }
             ?.let { (it["amount"] as? Number)?.toLong() } ?: 1L
 
-        // User boxes — extract string IDs from the box maps
-        val (_, userNanoErg, userBoxMaps) = client.getMyAssets(senderAddress, checkMempool)
+        // User boxes — fetch from all selected addresses
+        var userNanoErg = 0L
+        val userBoxMaps = mutableListOf<Map<String, Any>>()
+        for (addr in addresses) {
+            val (_, n, boxes) = client.getMyAssets(addr, checkMempool)
+            userNanoErg += n
+            userBoxMaps.addAll(boxes)
+        }
         val userBoxIds = userBoxMaps.mapNotNull { it["boxId"] as? String }
 
         return ProtocolState(
