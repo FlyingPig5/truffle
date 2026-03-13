@@ -326,33 +326,11 @@ fun WalletInfoContent(
                     )
                 }
             } else {
-                var isTokensExpanded by remember { mutableStateOf(false) }
-                val tokensToDisplay = if (isTokensExpanded) sortedTokens else sortedTokens.take(5)
-
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().weight(1f)
                 ) {
-                    items(tokensToDisplay) { (tokenId, amount) ->
+                    items(sortedTokens) { (tokenId, amount) ->
                         TokenBalanceItem(tokenId, amount, viewModel)
-                    }
-
-                    if (sortedTokens.size > 5) {
-                        item {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { isTokensExpanded = !isTokensExpanded }
-                                    .padding(vertical = 10.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = if (isTokensExpanded) "Show Less" else "+${sortedTokens.size - 5}",
-                                    color = ColorAccent,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
                     }
                 }
             }
@@ -554,17 +532,7 @@ fun NetworkTradeHistoryItemView(trade: NetworkTransaction, viewModel: SwapViewMo
                         Text("From:", color = ColorAccent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     }
                     items(trade.inputs) { inp ->
-                        Column(modifier = Modifier.padding(vertical = 5.dp)) {
-                            val addr = if (inp.address.length > 20) inp.address.take(10) + "..." + inp.address.takeLast(10) else inp.address
-                            Text(addr, color = ColorTextDim, fontSize = 10.sp)
-                            Text("${SwapViewModel.formatErg(inp.value.toDouble() / 1_000_000_000.0)} ERG", color = Color.White, fontSize = 12.sp)
-                            inp.assets.forEach { map ->
-                                val tId = map["tokenId"] as? String ?: ""
-                                val amt = (map["amount"] as? Number)?.toLong() ?: 0L
-                                val tName = viewModel.getTokenName(tId)
-                                Text("${viewModel.formatBalance(tId, amt)} $tName", color = Color.White, fontSize = 12.sp)
-                            }
-                        }
+                        CollapsibleBoxRow(inp, viewModel)
                     }
                     
                     item {
@@ -572,17 +540,7 @@ fun NetworkTradeHistoryItemView(trade: NetworkTransaction, viewModel: SwapViewMo
                         Text("To:", color = ColorAccent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     }
                     items(trade.outputs) { out ->
-                        Column(modifier = Modifier.padding(vertical = 5.dp)) {
-                            val addr = if (out.address.length > 20) out.address.take(10) + "..." + out.address.takeLast(10) else out.address
-                            Text(addr, color = ColorTextDim, fontSize = 10.sp)
-                            Text("${SwapViewModel.formatErg(out.value.toDouble() / 1_000_000_000.0)} ERG", color = Color.White, fontSize = 12.sp)
-                            out.assets.forEach { map ->
-                                val tId = map["tokenId"] as? String ?: ""
-                                val amt = (map["amount"] as? Number)?.toLong() ?: 0L
-                                val tName = viewModel.getTokenName(tId)
-                                Text("${viewModel.formatBalance(tId, amt)} $tName", color = Color.White, fontSize = 12.sp)
-                            }
-                        }
+                        CollapsibleBoxRow(out, viewModel)
                     }
                 }
             },
@@ -623,6 +581,38 @@ fun TokenBalanceItem(tokenId: String, amount: Long, viewModel: SwapViewModel) {
                 color = Color.White,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
+fun CollapsibleBoxRow(box: TxBox, viewModel: SwapViewModel) {
+    var isExpanded by remember { mutableStateOf(false) }
+    val threshold = 5
+
+    Column(modifier = Modifier.padding(vertical = 5.dp)) {
+        val addr = if (box.address.length > 20) box.address.take(10) + "..." + box.address.takeLast(10) else box.address
+        Text(addr, color = ColorTextDim, fontSize = 10.sp)
+        Text("${SwapViewModel.formatErg(box.value.toDouble() / 1_000_000_000.0)} ERG", color = Color.White, fontSize = 12.sp)
+
+        val assetsToShow = if (box.assets.size >= threshold && !isExpanded) box.assets.take(threshold - 1) else box.assets
+        assetsToShow.forEach { map ->
+            val tId = map["tokenId"] as? String ?: ""
+            val amt = (map["amount"] as? Number)?.toLong() ?: 0L
+            val tName = viewModel.getTokenName(tId)
+            Text("${viewModel.formatBalance(tId, amt)} $tName", color = Color.White, fontSize = 12.sp)
+        }
+
+        if (box.assets.size >= threshold) {
+            Text(
+                text = if (isExpanded) "▲ Show less" else "▼ +${box.assets.size - (threshold - 1)} more tokens",
+                color = ColorAccent,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clickable { isExpanded = !isExpanded }
+                    .padding(top = 2.dp)
             )
         }
     }

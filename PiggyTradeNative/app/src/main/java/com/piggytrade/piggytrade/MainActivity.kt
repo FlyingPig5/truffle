@@ -111,7 +111,8 @@ class MainActivity : FragmentActivity() {
                             onBack = { currentScreen = "settings" }
                         )
                         "add_node" -> AddNodeScreen(
-                            onBack = { currentScreen = "settings" }
+                            onBack = { currentScreen = "settings" },
+                            allowHttpNodes = uiState.allowHttpNodes
                         )
                         "add_wallet" -> AddWalletScreen(
                             viewModel = viewModel,

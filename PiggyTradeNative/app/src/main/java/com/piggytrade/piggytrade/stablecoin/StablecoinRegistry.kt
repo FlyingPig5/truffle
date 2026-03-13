@@ -2,6 +2,10 @@ package com.piggytrade.piggytrade.stablecoin
 
 import com.piggytrade.piggytrade.stablecoin.use.UseArbmintProtocol
 import com.piggytrade.piggytrade.stablecoin.use.UseFreemintProtocol
+import com.piggytrade.piggytrade.stablecoin.sigmausd.SigmaUsdMintProtocol
+import com.piggytrade.piggytrade.stablecoin.sigmausd.SigmaRsvMintProtocol
+import com.piggytrade.piggytrade.stablecoin.dexygold.DexyGoldFreemintProtocol
+import com.piggytrade.piggytrade.stablecoin.dexygold.DexyGoldArbmintProtocol
 
 /**
  * Central registry for all [StablecoinProtocol] implementations.
@@ -40,8 +44,9 @@ object StablecoinRegistry {
     fun initialize() {
         register(UseFreemintProtocol())
         register(UseArbmintProtocol())
-        // Future protocols:
-        // register(DexyGoldFreemintProtocol())
-        // register(DexyGoldArbmintProtocol())
+        register(DexyGoldFreemintProtocol())
+        register(DexyGoldArbmintProtocol())
+        register(SigmaUsdMintProtocol())
+        register(SigmaRsvMintProtocol())
     }
 }

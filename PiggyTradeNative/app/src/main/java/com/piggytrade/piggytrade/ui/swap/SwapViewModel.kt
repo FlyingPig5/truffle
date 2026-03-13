@@ -1,4 +1,5 @@
 package com.piggytrade.piggytrade.ui.swap
+import com.piggytrade.piggytrade.BuildConfig
 import com.piggytrade.piggytrade.ui.theme.*
 import com.piggytrade.piggytrade.ui.common.*
 import com.piggytrade.piggytrade.ui.home.*
@@ -78,10 +79,12 @@ data class SwapState(
     val isLoadingMapping: Boolean = false,
     val isWalletExpanded: Boolean = false,
     val numFavorites: Int = 8,
+    val showFavorites: Boolean = false,
     val activeSelector: String? = null, // "from", "to", "fav", "wallet"
     val nodeUrl: String = "",
     val isToAssetFavorite: Boolean = false,
     val serviceFee: Double = 0.0,
+    val allowHttpNodes: Boolean = false,
     val activeTab: String = "dex", // "dex", "wallet", "bank"
 
     // ─── BANK STATE (Protocol-Agnostic) ──────────────────────────────────────
@@ -174,7 +177,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
     private var quoteJob: kotlinx.coroutines.Job? = null
 
     private val _uiState: MutableStateFlow<SwapState> by lazy {
-        Log.d(TAG, "Initializing MutableStateFlow...")
+        if (BuildConfig.DEBUG) Log.d(TAG, "Initializing MutableStateFlow...")
         val savedNodes = preferenceManager.loadNodes()
         val nodesMap = if (savedNodes.isEmpty()) com.piggytrade.piggytrade.protocol.NetworkConfig.NODES else savedNodes
         val nodesList = nodesMap.map { "${it.key}: ${(it.value as Map<String, Any>)["url"]}" }
@@ -228,14 +231,16 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 selectedAddress = initialAddress,
                 favorites = favorites,
                 includeUnconfirmed = (preferenceManager.loadSettings()["include_unconfirmed"] as? Boolean) ?: true,
-                numFavorites = numFavs
+                numFavorites = numFavs,
+                showFavorites = (preferenceManager.loadSettings()["show_favorites"] as? Boolean) ?: false,
+                allowHttpNodes = (preferenceManager.loadSettings()["allow_http_nodes"] as? Boolean) ?: false
             )
         )
     }
     val uiState: StateFlow<SwapState> by lazy { _uiState.asStateFlow() }
 
     init {
-        Log.d(TAG, "SwapViewModel instance created.")
+        if (BuildConfig.DEBUG) Log.d(TAG, "SwapViewModel instance created.")
         
         // 1. Initial immediate list setup (no network)
         loadPoolMappings(fetchLiquidity = false) 
@@ -301,8 +306,18 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                         nUrl = nUrl.substringAfter(": ")
                     }
                     
-                    val finalUrl = if (nUrl.startsWith("http")) nUrl else "https://ergo-node.eutxo.de"
-                    Log.d(TAG, "Using node URL: $finalUrl")
+                    val allowHttp = _uiState.value.allowHttpNodes
+                    val finalUrl = if (nUrl.startsWith("https://")) {
+                        nUrl
+                    } else if (nUrl.startsWith("http://") && allowHttp) {
+                        nUrl
+                    } else if (nUrl.startsWith("http://")) {
+                        Log.w(TAG, "HTTP node blocked (setting disabled), falling back to default HTTPS node")
+                        "https://ergo-node.eutxo.de"
+                    } else {
+                        "https://ergo-node.eutxo.de"
+                    }
+                    if (BuildConfig.DEBUG) Log.d(TAG, "Using node URL: $finalUrl")
                     val client = NodeClient(finalUrl)
                     nodeClient = client
                     trader = Trader(client, null, tokenRepository.tokens)
@@ -453,6 +468,13 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(debugMode = debug)
         val settings = preferenceManager.loadSettings().toMutableMap()
         settings["debug_mode"] = debug
+        preferenceManager.saveSettings(settings)
+    }
+
+    fun setAllowHttpNodes(allow: Boolean) {
+        _uiState.value = _uiState.value.copy(allowHttpNodes = allow)
+        val settings = preferenceManager.loadSettings().toMutableMap()
+        settings["allow_http_nodes"] = allow
         preferenceManager.saveSettings(settings)
     }
 
@@ -650,6 +672,13 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(numFavorites = num)
     }
 
+    fun setShowFavorites(show: Boolean) {
+        val settings = preferenceManager.loadSettings().toMutableMap()
+        settings["show_favorites"] = show
+        preferenceManager.saveSettings(settings)
+        _uiState.value = _uiState.value.copy(showFavorites = show)
+    }
+
     fun setActiveSelector(context: String?) {
         _uiState.value = _uiState.value.copy(activeSelector = context, selectionContext = context ?: "")
     }
@@ -812,7 +841,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.value = _uiState.value.copy(isBankLoading = true, bankError = null)
             }
             try {
-                android.util.Log.d("BankVM", "checkEligibility using node: ${client.nodeUrl}, address: $address, protocol: ${protocol.id}")
+                if (BuildConfig.DEBUG) android.util.Log.d("BankVM", "checkEligibility using node: ${client.nodeUrl}, address: $address, protocol: ${protocol.id}")
                 val eligibility = protocol.checkEligibility(client, address, _uiState.value.includeUnconfirmed)
                 withContext(Dispatchers.Main) {
                     _uiState.value = _uiState.value.copy(bankEligibility = eligibility, isBankLoading = false)
@@ -855,7 +884,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                         val header0 = headersArray.get(0).asJsonObject
                         val originalHeight = header0.get("height").asInt
                         if (buildHeight > originalHeight) {
-                            Log.d(TAG, "Patching headers[0].height from $originalHeight to $buildHeight for sigma-rust")
+                            if (BuildConfig.DEBUG) Log.d(TAG, "Patching headers[0].height from $originalHeight to $buildHeight for sigma-rust")
                             header0.addProperty("height", buildHeight)
                         }
                         com.google.gson.Gson().toJson(headersArray)
@@ -1253,7 +1282,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
 
     fun prepareSwap(onSuccess: () -> Unit, onError: (String) -> Unit) {
         val current = _uiState.value
-        Log.d(TAG, "prepareSwap called. current state info: from=${current.fromAsset}, amount=${current.fromAmount}")
+        if (BuildConfig.DEBUG) Log.d(TAG, "prepareSwap called. current state info: from=${current.fromAsset}, amount=${current.fromAmount}")
         
         val amount = current.fromAmount.toDoubleOrNull()
         if (amount == null || amount <= 0 || current.fromAsset.isEmpty() || current.toAsset.isEmpty()) {
@@ -1263,11 +1292,11 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isBuildingTx = true)
-            Log.d(TAG, "isBuildingTx set to true")
+            if (BuildConfig.DEBUG) Log.d(TAG, "isBuildingTx set to true")
             try {
                 val route = tokenRepository.tradeMapper.resolve(current.fromAsset, current.toAsset)
                 if (route == null) throw Exception("No pool found for this pair")
-                Log.d(TAG, "Resolved route: tokenKey=${route.tokenKey}, type=${route.orderType}")
+                if (BuildConfig.DEBUG) Log.d(TAG, "Resolved route: tokenKey=${route.tokenKey}, type=${route.orderType}")
 
                 val addr = current.selectedAddress
                 if (addr.isEmpty()) throw Exception("No wallet selected")
@@ -1278,7 +1307,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
             val txBuilder = com.piggytrade.piggytrade.blockchain.TxBuilder(client, addr)
             val traderLocal = Trader(client, txBuilder, tokenRepository.tokens, null)
 
-            Log.d(TAG, "Building transaction at height $currentHeight...")
+            if (BuildConfig.DEBUG) Log.d(TAG, "Building transaction at height $currentHeight...")
             val txDict = traderLocal.buildSwapTransaction(
                 poolKey = route.tokenKey,
                 amount = amount,
@@ -1289,7 +1318,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 fee = current.minerFee,
                 includeUnconfirmed = current.includeUnconfirmed
             )
-                Log.i(TAG, "Successfully built transaction.")
+                if (BuildConfig.DEBUG) Log.i(TAG, "Successfully built transaction.")
 
                 val serviceFee = (txDict["p_shift"] as? Number)?.toDouble()?.div(1_000_000_000.0) ?: 0.0
 
@@ -1331,7 +1360,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                     ergopayUrl = ergopayUrl
                 )
 
-                Log.d(TAG, "Updating UI state with reviewParams...")
+                if (BuildConfig.DEBUG) Log.d(TAG, "Updating UI state with reviewParams...")
                 _uiState.value = _uiState.value.copy(
                     isBuildingTx = false,
                     preparedTxData = txDict,
@@ -1340,7 +1369,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                     cachedHeadersJson = buildHeadersJson
                 )
                 
-                Log.d(TAG, "Executing onSuccess callback...")
+                if (BuildConfig.DEBUG) Log.d(TAG, "Executing onSuccess callback...")
                 launch {
                     onSuccess()
                 }
@@ -1398,11 +1427,6 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 // Sign
                 val signedJson = signer.signTransaction(txDict, current.selectedAddress, mnemonic, "", headersJson)
                 val signedTxMap = signer.txGson.fromJson(signedJson, Map::class.java) as Map<String, Any>
-
-                // Log the full signed TX for debugging
-                Log.d(TAG, "=== SIGNED TX JSON ===")
-                Log.d(TAG, signedJson)
-                Log.d(TAG, "=== END SIGNED TX ===")
 
                 val txId = try {
                     if (current.isSimulation) {
@@ -1565,30 +1589,27 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         val whitelistedAssets = mutableSetOf<String>()
         whitelistedAssets.add("ERG")
         whitelistedArr.forEach { mapping ->
-            val name = mapping.name
-            if (mapping.data.containsKey("id_in")) {
-                val parts = name.split("-")
-                whitelistedAssets.add(parts[0])
-                whitelistedAssets.add(parts[1])
-            } else {
-                whitelistedAssets.add(name)
+            // Skip token-to-token pairs — they are for routing only.
+            // Check both the data (synced entries have id_in) and the repository.
+            val isT2T = mapping.data.containsKey("id_in") ||
+                        tokenRepository.isTokenToToken(mapping.key) ||
+                        tokenRepository.isTokenToToken(mapping.name)
+            if (!isT2T) {
+                whitelistedAssets.add(mapping.name)
             }
         }
         
-        // Include any token the user has in their wallet IF it exists in a discovered pool but is unverified
+        // Include any token the user has in their wallet IF it exists in a direct ERG-to-token
+        // discovered pool (not T2T pairs).
         _uiState.value.walletTokens.forEach { (tid, amount) ->
             if (amount > 0 && tid != "ERG") {
                 val name = getTokenName(tid)
-                // If it's unverified, check if there's at least one pool for it in the discovered list
+                // If it's unverified, check if there's at least one direct ERG pool for it
                 if (getVerificationStatus(name) == 2) {
-                    val hasPool = discoveredArr.any { p ->
-                        if (p.data.containsKey("id_in")) {
-                            p.data["id_in"] == tid || p.data["id_out"] == tid
-                        } else {
-                            p.data["id"] == tid
-                        }
+                    val hasDirectPool = discoveredArr.any { p ->
+                        !p.data.containsKey("id_in") && p.data["id"] == tid
                     }
-                    if (hasPool) {
+                    if (hasDirectPool) {
                         whitelistedAssets.add(name)
                     }
                 }
@@ -1711,7 +1732,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
 
     fun togglePoolWhitelist(mapping: PoolMapping, shouldWhitelist: Boolean, newName: String? = null) {
         if (mapping.status == 0) return // Locked
-        Log.d(TAG, "togglePoolWhitelist: key=${mapping.key}, shouldWhitelist=$shouldWhitelist")
+        if (BuildConfig.DEBUG) Log.d(TAG, "togglePoolWhitelist: key=${mapping.key}, shouldWhitelist=$shouldWhitelist")
         
         // Optimistic UI Update
         _uiState.value = _uiState.value.copy(

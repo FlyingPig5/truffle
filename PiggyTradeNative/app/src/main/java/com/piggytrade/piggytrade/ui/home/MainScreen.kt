@@ -4,6 +4,8 @@ import com.piggytrade.piggytrade.ui.common.*
 import com.piggytrade.piggytrade.ui.swap.*
 import com.piggytrade.piggytrade.ui.wallet.*
 import com.piggytrade.piggytrade.ui.settings.*
+import com.piggytrade.piggytrade.ui.bank.*
+import android.widget.Toast
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
@@ -91,8 +93,8 @@ fun MainScreen(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     label = "TabTransition"
                 ) { tab ->
-                    if (tab == "dex") {
-                        TradeCard(modifier = Modifier.fillMaxSize()) {
+                    when (tab) {
+                        "dex" -> TradeCard(modifier = Modifier.fillMaxSize()) {
                             Box(contentAlignment = Alignment.Center) {
                                 Column {
                                     // FROM section
@@ -110,7 +112,7 @@ fun MainScreen(
                                     onClick = { viewModel.swapDirection() },
                                     modifier = Modifier
                                         .size(40.dp)
-                                        .offset(y = 24.dp), // Positions button over the seam
+                                        .offset(y = if (uiState.showFavorites) 24.dp else 0.dp),
                                     iconSize = 24.dp,
                                     iconColor = Color.White,
                                     radius = 20.dp,
@@ -122,17 +124,22 @@ fun MainScreen(
                             // Status Box - Expanded Quote Details
                             OrderDetailsPanel(uiState, viewModel)
 
-                            if (uiState.debugMode) {
-                                DebugModeButtons(uiState, viewModel)
-                            }
+
+
 
                             Spacer(modifier = Modifier.weight(1f)) // Push button to bottom of card
 
                             // Swap Button
                             SwapButton(uiState, isSwapValid, fromAmountValue, fromBalanceValue, { showBetaDisclaimer = true })
                         }
-                    } else {
-                        Box(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp)) {
+                        "bank" -> TradeCard(modifier = Modifier.fillMaxSize()) {
+                             BankScreen(
+                                 uiState = uiState,
+                                 viewModel = viewModel,
+                                 onSubmit = { showBetaDisclaimer = true }
+                             )
+                        }
+                        else -> Box(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp)) {
                             WalletInfoContent(
                                 walletName = uiState.selectedWallet,
                                 viewModel = viewModel,
@@ -149,7 +156,26 @@ fun MainScreen(
             TokenSelectorPopup(uiState, viewModel)
 
             if (showBetaDisclaimer) {
-                BetaDisclaimerDialog(showBetaDisclaimer, viewModel, context, onSubmit, { showBetaDisclaimer = false })
+                BetaDisclaimerDialog(
+                    showBetaDisclaimer = showBetaDisclaimer,
+                    onConfirm = {
+                        if (uiState.activeTab == "dex") {
+                            viewModel.prepareSwap(
+                                onSuccess = { onSubmit() },
+                                onError = { err ->
+                                    Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+                                }
+                            )
+                        } else if (uiState.activeTab == "bank") {
+                            if (uiState.bankMode == "redeem") {
+                                viewModel.buildRedeemTransaction(onSubmit)
+                            } else {
+                                viewModel.buildMintTransaction(onSubmit)
+                            }
+                        }
+                    },
+                    onDismiss = { showBetaDisclaimer = false }
+                )
             }
         }
     }

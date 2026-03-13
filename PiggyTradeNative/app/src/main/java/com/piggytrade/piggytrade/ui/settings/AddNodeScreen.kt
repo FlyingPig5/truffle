@@ -19,9 +19,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
-fun AddNodeScreen(onBack: () -> Unit) {
+fun AddNodeScreen(
+    onBack: () -> Unit,
+    allowHttpNodes: Boolean = false
+) {
     var nodeUrl by remember { mutableStateOf("") }
     var nodeName by remember { mutableStateOf("") }
+
+    val isHttpUrl = nodeUrl.trimStart().lowercase().startsWith("http://")
+    val httpBlocked = isHttpUrl && !allowHttpNodes
 
     Column(
         modifier = Modifier
@@ -48,15 +54,33 @@ fun AddNodeScreen(onBack: () -> Unit) {
             OutlinedTextField(
                 value = nodeUrl,
                 onValueChange = { nodeUrl = it },
-                modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = if (httpBlocked || (isHttpUrl && allowHttpNodes)) 5.dp else 20.dp),
                 placeholder = { Text("https://...", color = ColorInputHint) },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedContainerColor = ColorInputBg,
                     unfocusedContainerColor = ColorInputBg,
-                    focusedBorderColor = Color(0xFF535C6E),
-                    unfocusedBorderColor = Color(0xFF535C6E)
+                    focusedBorderColor = if (httpBlocked) Color(0xFFFF4444) else Color(0xFF535C6E),
+                    unfocusedBorderColor = if (httpBlocked) Color(0xFFFF4444) else Color(0xFF535C6E)
                 )
             )
+
+            if (httpBlocked) {
+                Text(
+                    text = "⛔ HTTP nodes are blocked by default. Enable 'Allow HTTP Nodes' in Settings → Advanced to use this URL.",
+                    color = Color(0xFFFF4444),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 15.dp)
+                )
+            } else if (isHttpUrl && allowHttpNodes) {
+                Text(
+                    text = "⚠️ This is an HTTP (unencrypted) node. Traffic can be intercepted.",
+                    color = Color(0xFFFF6B35),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 15.dp)
+                )
+            }
 
             Text("NAME (OPTIONAL)", color = ColorText, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 5.dp))
             OutlinedTextField(
@@ -73,9 +97,14 @@ fun AddNodeScreen(onBack: () -> Unit) {
 
             Button(
                 onClick = { /* TODO add node and back */ onBack() },
+                enabled = nodeUrl.isNotEmpty() && !httpBlocked,
                 modifier = Modifier.fillMaxWidth().height(55.dp),
                 shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = ColorBlue)
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = ColorBlue,
+                    disabledContainerColor = Color(0xFF1C1C1C),
+                    disabledContentColor = Color(0xFF555555)
+                )
             ) {
                 Text("Add Node", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }

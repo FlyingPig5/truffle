@@ -33,25 +33,27 @@ fun FromTokenPanel(uiState: SwapState, viewModel: SwapViewModel) {
             .fillMaxWidth()
             .padding(horizontal = 10.dp)
     ) {
-        // Favorites: Single Line Scrollable
-        LazyRow(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            itemsIndexed(uiState.favorites.take(uiState.numFavorites)) { index, fav ->
-                FavoriteButton(
-                    index = index,
-                    fav = fav,
-                    isSelected = uiState.firstFavoriteSelectedIndex == index,
-                    onClick = { viewModel.handleFavClick(index, fav) },
-                    onLongClick = {
-                        if (index != 0) {
-                            viewModel.startEditingFavorite(index)
-                            viewModel.setActiveSelector("fav")
-                        }
-                    },
-                    vm = viewModel
-                )
+        // Favorites: Single Line Scrollable (hidden when showFavorites is off)
+        if (uiState.showFavorites) {
+            LazyRow(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                itemsIndexed(uiState.favorites.take(uiState.numFavorites)) { index, fav ->
+                    FavoriteButton(
+                        index = index,
+                        fav = fav,
+                        isSelected = uiState.firstFavoriteSelectedIndex == index,
+                        onClick = { viewModel.handleFavClick(index, fav) },
+                        onLongClick = {
+                            if (index != 0) {
+                                viewModel.startEditingFavorite(index)
+                                viewModel.setActiveSelector("fav")
+                            }
+                        },
+                        vm = viewModel
+                    )
+                }
             }
         }
 
@@ -331,7 +333,7 @@ fun OrderDetailsPanel(uiState: SwapState, viewModel: SwapViewModel) {
             Slider(
                 value = uiState.minerFee.toFloat(),
                 onValueChange = { viewModel.setMinerFee(it.toDouble()) },
-                valueRange = 0.001f..0.2f,
+                valueRange = 0.0011f..0.2f,
                 modifier = Modifier.fillMaxWidth(),
                 colors = SliderDefaults.colors(
                     thumbColor = ColorAccent,

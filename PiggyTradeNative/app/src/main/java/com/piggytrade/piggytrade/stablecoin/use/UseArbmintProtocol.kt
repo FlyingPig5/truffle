@@ -1,6 +1,7 @@
 package com.piggytrade.piggytrade.stablecoin.use
 
 import android.util.Log
+import com.piggytrade.piggytrade.BuildConfig
 import com.piggytrade.piggytrade.network.NodeClient
 import com.piggytrade.piggytrade.stablecoin.EligibilityResult
 import com.piggytrade.piggytrade.stablecoin.MintQuote
@@ -183,7 +184,7 @@ class UseArbmintProtocol : StablecoinProtocol {
         val lastHeaders = client.api.getLastHeaders(10)
         val lastHeaderHeight = (lastHeaders.firstOrNull()?.get("height") as? Number)?.toInt() ?: 0
         val height = maxOf(fullHeight, lastHeaderHeight)
-        Log.d(TAG, "buildTransaction: fullHeight=$fullHeight, lastHeaders[0]=$lastHeaderHeight, using=$height")
+        if (BuildConfig.DEBUG) Log.d(TAG, "buildTransaction: fullHeight=$fullHeight, lastHeaders[0]=$lastHeaderHeight, using=$height")
 
         val rates = calculateRates(state.oracleRateWhole)
 

@@ -24,14 +24,13 @@ import com.piggytrade.piggytrade.ui.swap.SwapViewModel
  *  ┌─────────────────────────────────────┐
  *  │  [Scrollable content]               │
  *  │   - Protocol selector               │
- *  │   - YOU PAY panel                   │
- *  │   - arrow                           │
- *  │   - YOU RECEIVE panel               │
- *  │   - Protocol Status card            │
+ *  │   - Mint / Redeem toggle            │
+ *  │   - Amount input panel              │
  *  │   - Order Details card              │
+ *  │   - Protocol Status card            │
  *  │   - Error display                   │
  *  ├─────────────────────────────────────┤
- *  │  [MINT button — fixed at bottom]    │
+ *  │  [Action button — fixed at bottom]  │
  *  └─────────────────────────────────────┘
  */
 @Composable
@@ -45,8 +44,8 @@ fun BankScreen(
         ?: protocols.firstOrNull()
 
     val scrollState = rememberScrollState()
+    val isRedeemMode = uiState.bankMode == "redeem"
 
-    // Column Scope content (since it's inside TradeCard)
     Column(modifier = Modifier.fillMaxWidth().fillMaxHeight()) {
 
         // ── Scrollable content ─────────────────────────────────────────────────
@@ -110,7 +109,15 @@ fun BankScreen(
                 }
             }
 
-            // YOU MINT (user enters desired amount)
+            // Mode Toggle (Mint / Redeem) — only for protocols that support it
+            if (activeProtocol?.supportsRedeem == true) {
+                BankModeToggle(
+                    currentMode = uiState.bankMode,
+                    onModeChange = { viewModel.setBankMode(it) }
+                )
+            }
+
+            // Amount input panel
             val tokenName = activeProtocol?.mintTokenName ?: "TOKEN"
             val tokenId   = activeProtocol?.mintTokenId ?: ""
             val tokenBalance = if (tokenId.isNotEmpty()) {
@@ -119,18 +126,31 @@ fun BankScreen(
                 if (rawAmount > 0L) "%.${dec}f".format(rawAmount.toDouble() / Math.pow(10.0, dec.toDouble())) else ""
             } else ""
 
+            // In redeem mode: panel shows "YOU REDEEM" + token name; in mint mode: "YOU MINT"
             BankReceivePanel(
                 amount = uiState.bankAmount,
                 tokenName = tokenName,
                 tokenBalance = tokenBalance,
-                onAmountChange = { viewModel.setBankAmount(it) }
+                onAmountChange = { viewModel.setBankAmount(it) },
+                label = if (isRedeemMode) "YOU REDEEM" else "YOU MINT",
+                tokenId = tokenId,
+                decimals = activeProtocol?.mintTokenDecimals ?: 2
             )
 
-            // Order Details (collapsed by default — shows total cost + breakdown)
-            BankOrderDetailsPanel(quote = uiState.bankQuote)
+            // Order Details (collapsed by default — shows total cost/receive + breakdown)
+            BankOrderDetailsPanel(
+                quote = uiState.bankQuote,
+                redeemQuote = uiState.bankRedeemQuote,
+                bankMode = uiState.bankMode,
+                minerFee = uiState.minerFee,
+                onMinerFeeChange = { viewModel.setMinerFee(it) }
+            )
 
             // Protocol Status Card (collapsed by default, with colour indicator)
-            ProtocolStatusCard(eligibility = uiState.bankEligibility)
+            ProtocolStatusCard(
+                eligibility = uiState.bankEligibility,
+                bankMode = uiState.bankMode
+            )
 
             // Error display
             if (!uiState.bankError.isNullOrEmpty()) {
@@ -147,20 +167,41 @@ fun BankScreen(
             }
         }
 
-        // ── MINT button — pinned at bottom, above the nav bar ─────────────────
+        // ── Action button — pinned at bottom ──────────────────────────────────
         val amount = uiState.bankAmount.toDoubleOrNull() ?: 0.0
-        val requiredErg = (uiState.bankQuote?.ergCost ?: 0L) + (uiState.bankQuote?.miningFee ?: 0L)
-        val insufficientErg = requiredErg > 0L && uiState.walletErgBalance < requiredErg.toDouble() / 1_000_000_000.0
+
+        // Check if the current mode is eligible
+        val eligibility = uiState.bankEligibility
+        val isEligibleForMode = if (isRedeemMode) {
+            eligibility?.canRedeem == true
+        } else {
+            eligibility?.canMint == true
+        }
+
+        val insufficientBalance = if (isRedeemMode) {
+            // In redeem mode: check token balance
+            val rawBalance = uiState.walletTokens[activeProtocol?.mintTokenId ?: ""] ?: 0L
+            val dec = activeProtocol?.mintTokenDecimals ?: 0
+            val humanBalance = rawBalance.toDouble() / Math.pow(10.0, dec.toDouble())
+            amount > 0.0 && amount > humanBalance
+        } else {
+            // In mint mode: check ERG balance
+            val requiredErg = (uiState.bankQuote?.ergCost ?: 0L) + (uiState.bankQuote?.miningFee ?: 0L)
+            requiredErg > 0L && uiState.walletErgBalance < requiredErg.toDouble() / 1_000_000_000.0
+        }
+
 
         MintButton(
             protocolName = activeProtocol?.mintTokenName ?: "TOKEN",
             isLoading = uiState.isBankLoading,
             isBuildingTx = uiState.isBuildingTx,
-            canMint = (uiState.bankEligibility?.canMint == true) && amount > 0.0,
-            insufficientBalance = insufficientErg,
+            canMint = isEligibleForMode && amount > 0.0,
+            insufficientBalance = insufficientBalance,
+            bankMode = uiState.bankMode,
             onMint = { onSubmit() }
         )
 
         Spacer(Modifier.height(8.dp))
     }
 }
+

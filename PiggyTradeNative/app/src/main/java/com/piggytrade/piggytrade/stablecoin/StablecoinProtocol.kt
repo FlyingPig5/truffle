@@ -24,8 +24,9 @@ data class StatusField(
  */
 data class EligibilityResult(
     val canMint: Boolean,
-    val reason: String? = null,       // Human-readable reason when canMint = false
-    val availableCapacity: Long = 0L, // raw token units
+    val canRedeem: Boolean = true,       // Whether redeem is allowed (defaults true for backward compat)
+    val reason: String? = null,          // Human-readable reason when something is blocked
+    val availableCapacity: Long = 0L,    // raw token units
     val statusFields: List<StatusField> = emptyList()
 )
 
@@ -42,6 +43,19 @@ data class MintQuote(
     val miningFee: Long
 )
 
+/**
+ * Result of a redeem (sell-back) operation.
+ * [ergReceived] is the nanoErg the user gets back after fees.
+ */
+data class RedeemQuote(
+    val tokenRedeemed: String,                    // e.g. "SigUSD"
+    val amountRedeemed: Long,                     // raw units being returned
+    val tokenDecimals: Int,
+    val ergReceived: Long,                        // nanoErg returned to user (after all fees)
+    val feeBreakdown: List<Pair<String, Long>>,
+    val miningFee: Long
+)
+
 // ─── Protocol Interface ───────────────────────────────────────────────────────
 
 /**
@@ -52,6 +66,10 @@ data class MintQuote(
  *  - [getQuote]        drives the order details panel.
  *  - [buildTransaction] produces the same Map<String,Any> shape as TxBuilder.
  *  - [postProcessUnsignedTx] is an optional hook for context-variable injection.
+ *
+ * Protocols that support redeem (selling tokens back) override [supportsRedeem],
+ * [getRedeemQuote], and [buildRedeemTransaction]. Default implementations throw
+ * so existing mint-only protocols (USE) don't need changes.
  *
  * Register new protocols via [StablecoinRegistry.register] at app startup.
  */
@@ -65,6 +83,9 @@ interface StablecoinProtocol {
     val mintTokenId: String
     val mintTokenName: String
     val mintTokenDecimals: Int
+
+    /** Whether this protocol supports redeem (selling tokens back to the bank). */
+    val supportsRedeem: Boolean get() = false
 
     /**
      * Fetch on-chain state and return the current mint availability + status
@@ -108,4 +129,29 @@ interface StablecoinProtocol {
     fun postProcessUnsignedTx(
         unsignedTxDict: MutableMap<String, Any>
     ): Map<String, Any> = unsignedTxDict
+
+    // ─── Redeem Support (optional) ────────────────────────────────────────────
+
+    /**
+     * Calculate ERG received and fee breakdown for redeeming [amount] tokens.
+     * Only called when [supportsRedeem] is true.
+     */
+    suspend fun getRedeemQuote(
+        client: NodeClient,
+        amount: Double,
+        senderAddress: String,
+        checkMempool: Boolean
+    ): RedeemQuote = throw UnsupportedOperationException("Redeem not supported by $id")
+
+    /**
+     * Build the unsigned redeem transaction.
+     * Only called when [supportsRedeem] is true.
+     */
+    suspend fun buildRedeemTransaction(
+        client: NodeClient,
+        amount: Double,
+        senderAddress: String,
+        miningFee: Long,
+        checkMempool: Boolean
+    ): Map<String, Any> = throw UnsupportedOperationException("Redeem not supported by $id")
 }

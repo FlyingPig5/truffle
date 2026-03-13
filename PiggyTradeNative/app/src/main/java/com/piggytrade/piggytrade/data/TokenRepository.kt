@@ -2,6 +2,7 @@ package com.piggytrade.piggytrade.data
 
 import android.content.Context
 import android.util.Log
+import com.piggytrade.piggytrade.BuildConfig
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.piggytrade.piggytrade.blockchain.TradeMapper
@@ -179,7 +180,7 @@ class TokenRepository(private val context: Context) {
             val decodedFeeNum = decodeVlqZigZag(r4)
             val fee = (1000 - decodedFeeNum).toDouble() / 1000.0
             
-            if (index == 0) Log.d("TokenRepo", "Sample box R4: $r4 -> decoded: $decodedFeeNum -> fee: $fee")
+            if (index == 0 && BuildConfig.DEBUG) Log.d("TokenRepo", "Sample box R4: $r4 -> decoded: $decodedFeeNum -> fee: $fee")
 
             if (assets.size >= 3) {
                 val pid = assets[0]["tokenId"] as String
@@ -531,8 +532,20 @@ class TokenRepository(private val context: Context) {
                 val pid = data["pid"] as? String ?: ""
                 val normalizedKey = normalizeTokenName(key)
                 
-                // Only add if not already present or if the existing one isn't official
                 val existing = combined[normalizedKey]
+                
+                // If the existing synced entry has id_in (T2T pair), don't overwrite it
+                // with the stripped tokens.json version that only has pid.
+                if (existing != null && existing.containsKey("id_in")) {
+                    // Just update the official/whitelisted flags on the existing entry
+                    val mut = existing.toMutableMap()
+                    mut["official"] = true
+                    mut["whitelisted"] = true
+                    combined[normalizedKey] = mut
+                    return@forEach
+                }
+                
+                // Only add if not already present or if the existing one isn't official
                 if (existing == null || !(existing["official"] as? Boolean ?: false)) {
                     val mut = data.toMutableMap()
                     mut["official"] = true
@@ -662,12 +675,12 @@ class TokenRepository(private val context: Context) {
         val mediaType = "application/json".toMediaTypeOrNull()
         val jsonAddress = "\"$address\""
         
-        Log.d("TokenRepo", "Fetching boxes for address (JSON): ${address.take(15)}...")
+        if (BuildConfig.DEBUG) Log.d("TokenRepo", "Fetching boxes for address (JSON): ${address.take(15)}...")
         
         while (true) {
             try {
                 onBatch?.invoke(offset)
-                Log.d("TokenRepo", "Requesting boxes with offset=$offset, limit=$limit")
+                if (BuildConfig.DEBUG) Log.d("TokenRepo", "Requesting boxes with offset=$offset, limit=$limit")
                 val boxes = nodeClient.api.getUnspentBoxesByAddressPost(
                     offset = offset,
                     limit = limit,
@@ -676,7 +689,7 @@ class TokenRepository(private val context: Context) {
                     address = jsonAddress.toRequestBody(mediaType)
                 )
                 
-                Log.d("TokenRepo", "Received ${boxes.size} boxes")
+                if (BuildConfig.DEBUG) Log.d("TokenRepo", "Received ${boxes.size} boxes")
                 if (boxes.isEmpty()) break
                 allBoxes.addAll(boxes)
                 if (boxes.size < limit) break
@@ -690,7 +703,7 @@ class TokenRepository(private val context: Context) {
                 break
             }
         }
-        Log.d("TokenRepo", "Finished fetching. Total boxes: ${allBoxes.size}")
+        if (BuildConfig.DEBUG) Log.d("TokenRepo", "Finished fetching. Total boxes: ${allBoxes.size}")
         return allBoxes
     }
 
@@ -700,7 +713,7 @@ class TokenRepository(private val context: Context) {
         val limit = 50
         val mediaType = "text/plain".toMediaTypeOrNull()
         
-        Log.d("TokenRepo", "Fetching boxes for address (RAW): ${address.take(15)}...")
+        if (BuildConfig.DEBUG) Log.d("TokenRepo", "Fetching boxes for address (RAW): ${address.take(15)}...")
         
         while (true) {
             try {
@@ -733,7 +746,20 @@ class TokenRepository(private val context: Context) {
     fun getTokenToTokenJson(): String = if (tokenToTokenFile.exists()) tokenToTokenFile.readText() else "{}"
     
     fun isTokenToToken(name: String): Boolean {
-        return tokens[name]?.containsKey("id_in") == true
+        // Direct check: entry has id_in in its data
+        if (tokens[name]?.containsKey("id_in") == true) return true
+        // Heuristic: if name has a hyphen and both halves exist as separate entries, it's a T2T pair
+        if (name.contains("-")) {
+            val parts = name.split("-", limit = 2)
+            if (parts.size == 2) {
+                val left = parts[0].trim()
+                val right = parts[1].trim()
+                val leftExists = tokens.keys.any { it.equals(left, ignoreCase = true) && !it.contains("-") }
+                val rightExists = tokens.keys.any { it.equals(right, ignoreCase = true) && !it.contains("-") }
+                if (leftExists && rightExists) return true
+            }
+        }
+        return false
     }
 
     fun deleteTokenData(name: String) {

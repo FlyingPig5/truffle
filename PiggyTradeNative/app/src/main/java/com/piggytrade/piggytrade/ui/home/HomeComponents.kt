@@ -81,7 +81,7 @@ fun BottomMenuBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(70.dp)
+            .height(50.dp)
             .background(ColorCard)
             .padding(horizontal = 20.dp),
         horizontalArrangement = Arrangement.spacedBy(40.dp, Alignment.CenterHorizontally),

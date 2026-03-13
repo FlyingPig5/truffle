@@ -1,6 +1,7 @@
 package com.piggytrade.piggytrade.blockchain
 
 import android.util.Log
+import com.piggytrade.piggytrade.BuildConfig
 
 data class TradeRoute(
     val tokenKey: String, // Original key from tokens map
@@ -93,7 +94,7 @@ class TradeMapper(private val tokens: Map<String, Map<String, Any>>) {
         val fa = normalizeAsset(fromAsset) ?: return null
         val ta = normalizeAsset(toAsset) ?: return null
 
-        Log.d(TAG, "resolve('$fromAsset','$toAsset') -> fa='$fa' ta='$ta' ergTokens=${ergTokens.size}")
+        if (BuildConfig.DEBUG) Log.d(TAG, "resolve('$fromAsset','$toAsset') -> fa='$fa' ta='$ta' ergTokens=${ergTokens.size}")
 
         // 1. Check ERG-Token pools
         if (fa == ERG) {
