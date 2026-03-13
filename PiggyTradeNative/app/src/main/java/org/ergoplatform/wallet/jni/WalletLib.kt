@@ -48,6 +48,7 @@ object WalletLib {
      *
      * @param dataInputBoxesJson JSON array of data input box objects — pass "[]" if none
      * @param contextExtensionsJson JSON map of {input_index: {key: hex_value}} — pass "{}" if none
+     * @param derivationCount number of EIP-3 derivation indices to derive keys for (= wallet address count)
      */
     @JvmStatic external fun signTransactionJson(
         mnemonic: String,
@@ -59,6 +60,7 @@ object WalletLib {
         changeAddress: String,
         currentHeight: Int,
         lastBlockHeadersJson: String,
-        contextExtensionsJson: String
+        contextExtensionsJson: String,
+        derivationCount: Int
     ): String
 }

@@ -1730,7 +1730,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 // sigma-rust uses this address to find the derivation root and scan
                 // multiple indices. The change output is already baked into the tx outputs.
                 val signAddr = current.selectedAddress
-                val signedJson = signer.signTransaction(txDict, signAddr, mnemonic, "", headersJson)
+                val signedJson = signer.signTransaction(txDict, signAddr, mnemonic, "", headersJson, addressCount = current.walletAddresses.size.coerceAtLeast(1))
                 val signedTxMap = signer.txGson.fromJson(signedJson, Map::class.java) as Map<String, Any>
 
                 val txId = try {
