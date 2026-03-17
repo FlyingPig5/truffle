@@ -176,7 +176,9 @@ class Trader(
         senderAddress: String,
         currentHeight: Int,
         fee: Double = 0.002,
-        includeUnconfirmed: Boolean = true
+        includeUnconfirmed: Boolean = true,
+        changeAddress: String? = null,
+        addressBoxes: Map<String, List<Map<String, Any>>>? = null
     ): Map<String, Any> {
         if (builder == null) throw IllegalStateException("TxBuilder not provided")
         
@@ -196,8 +198,55 @@ class Trader(
             lpSwapBox = client.getPoolBox(lpNftId, includeUnconfirmed) ?: throw IllegalArgumentException("${poolKey.uppercase()} LP Swap Box not found!")
         }
         
-        // Fetch user assets
-        val (myAssets, myNanoerg, userBoxes) = client.getMyAssets(senderAddress, includeUnconfirmed)
+        // Fetch user assets — use pre-fetched multi-address boxes or single address
+        val myAssets: Map<String, Long>
+        val myNanoerg: Long
+        val userBoxes: List<Map<String, Any>>
+
+        if (addressBoxes != null && addressBoxes.size > 1) {
+            // Multi-address mode: aggregate assets and select boxes smartly
+            val aggregatedAssets = mutableMapOf<String, Long>()
+            var totalNanoerg = 0L
+            val allUserBoxes = mutableListOf<Map<String, Any>>()
+            for ((_, boxes) in addressBoxes) {
+                for (box in boxes) {
+                    totalNanoerg += (box["value"] as? Number)?.toLong() ?: 0L
+                    val assets = box["assets"] as? List<Map<String, Any>> ?: emptyList()
+                    for (asset in assets) {
+                        val tid = asset["tokenId"] as String
+                        val amt = (asset["amount"] as? Number)?.toLong() ?: 0L
+                        aggregatedAssets[tid] = aggregatedAssets.getOrDefault(tid, 0L) + amt
+                    }
+                    allUserBoxes.add(box)
+                }
+            }
+            myAssets = aggregatedAssets
+            myNanoerg = totalNanoerg
+            // Smart box selection: pick minimum boxes needed
+            userBoxes = selectMinimumBoxes(allUserBoxes, (fee * 1_000_000_000).toLong(), poolType, orderType, cfg, amount)
+        } else if (addressBoxes != null && addressBoxes.size == 1) {
+            // Single address with pre-fetched boxes — use all boxes
+            val singleAddrBoxes = addressBoxes.values.first()
+            val aggregatedAssets = mutableMapOf<String, Long>()
+            var totalNanoerg = 0L
+            for (box in singleAddrBoxes) {
+                totalNanoerg += (box["value"] as? Number)?.toLong() ?: 0L
+                val assets = box["assets"] as? List<Map<String, Any>> ?: emptyList()
+                for (asset in assets) {
+                    val tid = asset["tokenId"] as String
+                    val amt = (asset["amount"] as? Number)?.toLong() ?: 0L
+                    aggregatedAssets[tid] = aggregatedAssets.getOrDefault(tid, 0L) + amt
+                }
+            }
+            myAssets = aggregatedAssets
+            myNanoerg = totalNanoerg
+            userBoxes = singleAddrBoxes
+        } else {
+            val (a, n, b) = client.getMyAssets(senderAddress, includeUnconfirmed)
+            myAssets = a
+            myNanoerg = n
+            userBoxes = b
+        }
         if (userBoxes.isEmpty()) throw IllegalArgumentException("No boxes found for address")
 
         val poolNanoerg = (poolBox["value"] as? Number)?.toLong() ?: 0L
@@ -283,7 +332,20 @@ class Trader(
             nodeParity += (d[i].code.xor(key[i % key.length].code)).toChar()
         }
  
-        val myAssetsBd = myAssets.mapValues { java.math.BigInteger.valueOf(it.value) }
+        // Recompute total assets/nanoergs from selected user boxes
+        var selectedNanoerg = 0L
+        val selectedAssets = mutableMapOf<String, Long>()
+        for (box in userBoxes) {
+            selectedNanoerg += (box["value"] as? Number)?.toLong() ?: 0L
+            val assets = box["assets"] as? List<Map<String, Any>> ?: emptyList()
+            for (asset in assets) {
+                val tid = asset["tokenId"] as String
+                val amt = (asset["amount"] as? Number)?.toLong() ?: 0L
+                selectedAssets[tid] = selectedAssets.getOrDefault(tid, 0L) + amt
+            }
+        }
+
+        val myAssetsBd = selectedAssets.mapValues { java.math.BigInteger.valueOf(it.value) }
         val bufferOffset = ErgoSigner("").resolveUtxoGap(nergToPool)
  
         val r4 = cfg["R4"] as? String ?: ""
@@ -292,7 +354,7 @@ class Trader(
         val txDict = builder.buildSwapTx(
             inputsRaw = inputsRaw,
             poolBox = poolBox,
-            userNanoergIn = java.math.BigInteger.valueOf(myNanoerg),
+            userNanoergIn = java.math.BigInteger.valueOf(selectedNanoerg),
             userAssetsIn = myAssetsBd,
             nergToPool = java.math.BigInteger.valueOf(nergToPool),
             tokensToPool = tokensToPoolList,
@@ -302,7 +364,8 @@ class Trader(
             nodeParity = nodeParity,
             currentHeight = currentHeight,
             registers = registers,
-            extraRequests = extraRequests
+            extraRequests = extraRequests,
+            changeAddress = changeAddress
         ).toMutableMap()
         
         txDict["inputIds"] = inputIds
@@ -316,5 +379,75 @@ class Trader(
         txDict["context_extensions"] = emptyMap<String, Any>()
         
         return txDict
+    }
+
+    /**
+     * Smart box selection for multi-address mode:
+     * Selects the minimum number of boxes needed to cover the required ERG and token amounts.
+     * Sorts boxes by value (descending) to minimize input count.
+     */
+    private fun selectMinimumBoxes(
+        allBoxes: List<Map<String, Any>>,
+        feeNano: Long,
+        poolType: String,
+        orderType: String,
+        cfg: Map<String, Any>,
+        amount: Double
+    ): List<Map<String, Any>> {
+        val amountDec = BigDecimal.valueOf(amount)
+        
+        // Calculate required ERG and tokens based on order type
+        var requiredErg = feeNano + 1_000_000L // fee + minimum box value
+        var requiredTokenId = ""
+        var requiredTokenAmount = 0L
+        
+        if (poolType == "erg") {
+            if (orderType.equals("buy", true)) {
+                requiredErg += amountDec.multiply(BigDecimal.valueOf(1_000_000_000)).toLong()
+            } else {
+                val dec = (cfg["dec"] as? Number)?.toInt() ?: 0
+                requiredTokenId = cfg["id"] as? String ?: ""
+                requiredTokenAmount = amountDec.multiply(BigDecimal.TEN.pow(dec)).toLong()
+            }
+        } else if (poolType == "token") {
+            if (orderType.equals("sell", true)) {
+                val decX = (cfg["dec_in"] as? Number)?.toInt() ?: 0
+                requiredTokenId = cfg["id_in"] as? String ?: ""
+                requiredTokenAmount = amountDec.multiply(BigDecimal.TEN.pow(decX)).toLong()
+            } else {
+                val decY = (cfg["dec_out"] as? Number)?.toInt() ?: 0
+                requiredTokenId = cfg["id_out"] as? String ?: ""
+                requiredTokenAmount = amountDec.multiply(BigDecimal.TEN.pow(decY)).toLong()
+            }
+        }
+        
+        // Sort boxes: prefer boxes with the required token first, then by ERG value descending
+        val sortedBoxes = allBoxes.sortedWith(compareByDescending<Map<String, Any>> { box ->
+            if (requiredTokenId.isNotEmpty()) {
+                val assets = box["assets"] as? List<Map<String, Any>> ?: emptyList()
+                assets.find { it["tokenId"] == requiredTokenId }?.let { (it["amount"] as? Number)?.toLong() ?: 0L } ?: 0L
+            } else 0L
+        }.thenByDescending { box ->
+            (box["value"] as? Number)?.toLong() ?: 0L
+        })
+        
+        val selected = mutableListOf<Map<String, Any>>()
+        var accErg = 0L
+        var accToken = 0L
+        
+        for (box in sortedBoxes) {
+            selected.add(box)
+            accErg += (box["value"] as? Number)?.toLong() ?: 0L
+            if (requiredTokenId.isNotEmpty()) {
+                val assets = box["assets"] as? List<Map<String, Any>> ?: emptyList()
+                accToken += assets.find { it["tokenId"] == requiredTokenId }?.let { (it["amount"] as? Number)?.toLong() ?: 0L } ?: 0L
+            }
+            
+            val ergMet = accErg >= requiredErg
+            val tokenMet = requiredTokenId.isEmpty() || accToken >= requiredTokenAmount
+            if (ergMet && tokenMet) break
+        }
+        
+        return selected
     }
 }

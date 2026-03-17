@@ -106,35 +106,26 @@ fun WalletInfoContent(
     LaunchedEffect(Unit) {
         viewModel.fetchWalletBalances()
         viewModel.fetchTransactionHistory()
+        viewModel.fetchTokenUsdValues()
     }
     
-    val sortedTokens = remember(uiState.walletTokens) {
+    val tokenUsdValues = uiState.tokenUsdValues
+    val sortedTokens = remember(uiState.walletTokens, tokenUsdValues) {
         uiState.walletTokens.toList().sortedWith { a, b ->
-            val tokenIdA = a.first
-            val tokenIdB = b.first
-            val nameA = viewModel.getTokenName(tokenIdA)
-            val nameB = viewModel.getTokenName(tokenIdB)
-            
-            fun getAssetPriority(name: String, id: String): Int {
-                if (name.uppercase() == "SIGUSD") return 0
-                if (name.uppercase() == "USE") return 1
-                if (name.uppercase() == "DEXYGOLD") return 2
-                val isNamed = !name.startsWith(id.take(5))
-                if (isNamed) return 10
-                return 100
+            val usdA = tokenUsdValues[a.first] ?: 0.0
+            val usdB = tokenUsdValues[b.first] ?: 0.0
+            // Swappable tokens first (those with USD value > 0)
+            val swapA = if (usdA > 0.01) 0 else 1
+            val swapB = if (usdB > 0.01) 0 else 1
+            if (swapA != swapB) swapA.compareTo(swapB)
+            // Within swappable: sort by USD value descending
+            else if (swapA == 0) usdB.compareTo(usdA)
+            // Within non-swappable: sort by name
+            else {
+                val nameA = viewModel.getTokenName(a.first)
+                val nameB = viewModel.getTokenName(b.first)
+                nameA.compareTo(nameB)
             }
-            
-            val prioA = getAssetPriority(nameA, tokenIdA)
-            val prioB = getAssetPriority(nameB, tokenIdB)
-            
-            if (prioA != prioB) return@sortedWith prioA.compareTo(prioB)
-            
-            val hasLogoA = viewModel.hasLogo(tokenIdA)
-            val hasLogoB = viewModel.hasLogo(tokenIdB)
-            
-            if (hasLogoA != hasLogoB) return@sortedWith if (hasLogoA) -1 else 1
-            
-            nameA.compareTo(nameB)
         }
     }
 
@@ -586,6 +577,7 @@ fun NetworkTradeHistoryItemView(trade: NetworkTransaction, viewModel: SwapViewMo
 
 @Composable
 fun TokenBalanceItem(tokenId: String, amount: Long, viewModel: SwapViewModel) {
+    val usdValue = viewModel.getTokenUsdValue(tokenId)
     Card(
         modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
         colors = CardDefaults.cardColors(containerColor = ColorInputBg),
@@ -607,12 +599,21 @@ fun TokenBalanceItem(tokenId: String, amount: Long, viewModel: SwapViewModel) {
                     Text(text = "ID: ${tokenId.take(8)}...", color = ColorTextDim, fontSize = 10.sp)
                 }
             }
-            Text(
-                text = viewModel.formatBalance(tokenId, amount),
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold
-            )
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = viewModel.formatBalance(tokenId, amount),
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                if (usdValue != null && usdValue > 0.01) {
+                    Text(
+                        text = "$${String.format("%.2f", usdValue)}",
+                        color = ColorTextDim,
+                        fontSize = 11.sp
+                    )
+                }
+            }
         }
     }
 }

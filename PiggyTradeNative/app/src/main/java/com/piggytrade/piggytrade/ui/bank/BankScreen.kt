@@ -56,29 +56,7 @@ fun BankScreen(
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
 
-            // ── Experimental Warning Banner ──────────────────────────────────
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 10.dp)
-                    .androidBorder(radius = 10.dp, borderWidth = 1.dp, borderColor = Color(0xFFFF3B30), bgColor = Color(0xFF3A1010))
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "\uE002",
-                    color = Color(0xFFFF3B30),
-                    fontSize = 18.sp,
-                    fontFamily = MaterialDesignIcons
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = "Experimental — Please validate all output values before confirming.",
-                    color = Color(0xFFFF6B60),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
+
 
             // Protocol Selector
             if (protocols.size > 1) {

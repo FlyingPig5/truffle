@@ -27,33 +27,23 @@ import com.piggytrade.piggytrade.R
 
 @Composable
 fun PiggyTopBar(isLoading: Boolean, onSettingsClick: () -> Unit) {
-    Box(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 10.dp, horizontal = 15.dp)
+            .background(ColorCard)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        // Center: Branding
-        Row(
-            modifier = Modifier.align(Alignment.Center),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(text = "Piggy", color = ColorText, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Image(
-                painter = painterResource(id = R.drawable.logo_topbar_and_standard_launcher),
-                contentDescription = "Logo",
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                modifier = Modifier
-                    .size(120.dp)
-                    .padding(horizontal = 4.dp)
-            )
-            Text(text = "Trade", color = ColorText, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        }
+        // Left: Piggy icon
+        Image(
+            painter = painterResource(id = R.drawable.piggy_alone),
+            contentDescription = "PiggyTrade",
+            modifier = Modifier.size(32.dp)
+        )
 
-        // Right side: Loading and Settings
-        Row(
-            modifier = Modifier.align(Alignment.CenterEnd),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        // Right: Loading and Settings
+        Row(verticalAlignment = Alignment.CenterVertically) {
             if (isLoading) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
@@ -83,8 +73,8 @@ fun BottomMenuBar(
             .fillMaxWidth()
             .height(50.dp)
             .background(ColorCard)
-            .padding(horizontal = 20.dp),
-        horizontalArrangement = Arrangement.spacedBy(40.dp, Alignment.CenterHorizontally),
+            .padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
         // DEX Tab
@@ -132,6 +122,54 @@ fun BottomMenuBar(
                 fontSize = 8.sp,
                 fontWeight = FontWeight.Bold,
                 color = if (activeTab == "bank") Color.White else ColorTextDim
+            )
+        }
+
+        // Portfolio Tab
+        Column(
+            modifier = Modifier
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { onTabClick("portfolio") }
+                ),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "\uE6B1", // pie_chart icon
+                fontFamily = MaterialDesignIcons,
+                fontSize = 28.sp,
+                color = if (activeTab == "portfolio") Color.White else ColorTextDim
+            )
+            Text(
+                text = "Portfolio",
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (activeTab == "portfolio") Color.White else ColorTextDim
+            )
+        }
+
+        // Ecosystem Tab
+        Column(
+            modifier = Modifier
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { onTabClick("ecosystem") }
+                ),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "\uE80B", // public / globe icon
+                fontFamily = MaterialDesignIcons,
+                fontSize = 28.sp,
+                color = if (activeTab == "ecosystem") Color.White else ColorTextDim
+            )
+            Text(
+                text = "Ecosystem",
+                fontSize = 7.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (activeTab == "ecosystem") Color.White else ColorTextDim
             )
         }
 

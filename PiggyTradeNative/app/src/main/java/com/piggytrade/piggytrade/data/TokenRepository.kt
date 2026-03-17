@@ -490,8 +490,51 @@ class TokenRepository(private val context: Context) {
 
     private fun loadCombinedTokens(): Map<String, Map<String, Any>> {
         val type = object : TypeToken<Map<String, Map<String, Any>>>() {}.type
+        val combined = mutableMapOf<String, Map<String, Any>>()
         
-        // 1. Load synced tokens (Local Files)
+        // ── STEP 1: Official whitelist (tokens.json) — IMMUTABLE FOUNDATION ──
+        // These entries own their clean name keys and can NEVER be overwritten by synced data.
+        val officialKeys = mutableSetOf<String>()
+        val officialPidToKey = mutableMapOf<String, String>()
+        try {
+            val inputStream = context.assets.open("tokens.json")
+            val typeObj = object : TypeToken<Map<String, Map<String, Any>>>() {}.type
+            val assetMap: Map<String, Map<String, Any>> = gson.fromJson(InputStreamReader(inputStream), typeObj) ?: emptyMap()
+            assetMap.forEach { (key, data) ->
+                val normalizedKey = normalizeTokenName(key)
+                val pid = data["pid"] as? String ?: ""
+                val mut = data.toMutableMap()
+                mut["official"] = true
+                mut["whitelisted"] = true
+                mut["name"] = normalizedKey
+                combined[normalizedKey] = mut
+                officialKeys.add(normalizedKey)
+                if (pid.isNotEmpty()) officialPidToKey[pid] = normalizedKey
+            }
+        } catch (e: Exception) {
+            Log.e("TokenRepo", "Error loading tokens.json: ${e.message}")
+        }
+        
+        // ── STEP 2: Hardcoded protocol tokens — also immutable ──
+        val useCfg = com.piggytrade.piggytrade.protocol.NetworkConfig.USE_CONFIG
+        combined["USE"] = useCfg.toMutableMap().apply {
+            put("official", true)
+            put("whitelisted", true)
+        }
+        officialKeys.add("USE")
+        (useCfg["pid"] as? String)?.let { officialPidToKey[it] = "USE" }
+        (useCfg["lp_nft"] as? String)?.let { officialPidToKey[it] = "USE" }
+        
+        val dexyCfg = com.piggytrade.piggytrade.protocol.NetworkConfig.DEXYGOLD_CONFIG
+        combined["DexyGold"] = dexyCfg.toMutableMap().apply {
+            put("official", true)
+            put("whitelisted", true)
+        }
+        officialKeys.add("DexyGold")
+        (dexyCfg["pid"] as? String)?.let { officialPidToKey[it] = "DexyGold" }
+        (dexyCfg["lp_nft"] as? String)?.let { officialPidToKey[it] = "DexyGold" }
+        
+        // ── STEP 3: Synced tokens — JOIN alongside, NEVER overwrite official keys ──
         val syncedErgToToken: Map<String, Map<String, Any>> = try {
             if (ergToTokenFile.exists()) gson.fromJson(ergToTokenFile.readText(), type) else emptyMap()
         } catch (e: Exception) { emptyMap() }
@@ -499,77 +542,57 @@ class TokenRepository(private val context: Context) {
         val syncedTokenToToken: Map<String, Map<String, Any>> = try {
             if (tokenToTokenFile.exists()) gson.fromJson(tokenToTokenFile.readText(), type) else emptyMap()
         } catch (e: Exception) { emptyMap() }
-
-        val combined = mutableMapOf<String, Map<String, Any>>()
         
         fun addSynced(syncedMap: Map<String, Map<String, Any>>) {
             syncedMap.forEach { (key, data) ->
                 val pid = data["pid"] as? String ?: (data["lp"] as? String ?: "")
-                if (pid.isNotEmpty()) {
-                    val mut = data.toMutableMap()
-                    if (isSystemVerified(pid)) {
-                        mut["official"] = true
-                        mut["whitelisted"] = true
-                    } else {
-                        mut["official"] = false
-                        mut["whitelisted"] = isPidWhitelisted(pid)
+                if (pid.isEmpty()) return@forEach
+                
+                val mut = data.toMutableMap()
+                val isOfficialPid = isSystemVerified(pid)
+                
+                if (isOfficialPid) {
+                    // This synced entry matches an official pool ID.
+                    // ENRICH the official entry with rich synced data (id, dec, fee, etc.)
+                    // but keep the official key — never create a duplicate.
+                    val officialKey = officialPidToKey[pid] ?: key
+                    val existingOfficial = combined[officialKey]
+                    if (existingOfficial != null) {
+                        val enriched = existingOfficial.toMutableMap()
+                        // Merge synced fields the official entry lacks
+                        for ((k, v) in mut) {
+                            if (!enriched.containsKey(k) || k == "id" || k == "dec" || k == "fee" || 
+                                k == "lp" || k == "R4" || k == "id_in" || k == "id_out" || 
+                                k == "dec_in" || k == "dec_out" || k == "name_in" || k == "name_out") {
+                                enriched[k] = v
+                            }
+                        }
+                        // Always preserve official flags
+                        enriched["official"] = true
+                        enriched["whitelisted"] = true
+                        combined[officialKey] = enriched
                     }
+                } else {
+                    // Non-official synced entry — add it but NEVER overwrite an official key
+                    mut["official"] = false
+                    mut["whitelisted"] = isPidWhitelisted(pid)
                     mut["user_added"] = customWhitelistPids.contains(pid)
-                    combined[key] = mut
+                    
+                    if (officialKeys.contains(key)) {
+                        // Name collision with official entry — force suffix
+                        val suffixedName = "$key (${pid.take(4)})"
+                        mut["name"] = suffixedName
+                        combined[suffixedName] = mut
+                    } else {
+                        mut["name"] = key
+                        combined[key] = mut
+                    }
                 }
             }
         }
 
         addSynced(syncedErgToToken)
         addSynced(syncedTokenToToken)
-
-        // 2. Inject official assets from tokens.json as baseline
-        try {
-            val inputStream = context.assets.open("tokens.json")
-            val typeObj = object : TypeToken<Map<String, Map<String, Any>>>() {}.type
-            val assetMap: Map<String, Map<String, Any>> = gson.fromJson(InputStreamReader(inputStream), typeObj) ?: emptyMap()
-            assetMap.forEach { (key, data) ->
-                val pid = data["pid"] as? String ?: ""
-                val normalizedKey = normalizeTokenName(key)
-                
-                val existing = combined[normalizedKey]
-                
-                // If the existing synced entry has id_in (T2T pair), don't overwrite it
-                // with the stripped tokens.json version that only has pid.
-                if (existing != null && existing.containsKey("id_in")) {
-                    // Just update the official/whitelisted flags on the existing entry
-                    val mut = existing.toMutableMap()
-                    mut["official"] = true
-                    mut["whitelisted"] = true
-                    combined[normalizedKey] = mut
-                    return@forEach
-                }
-                
-                // Only add if not already present or if the existing one isn't official
-                if (existing == null || !(existing["official"] as? Boolean ?: false)) {
-                    val mut = data.toMutableMap()
-                    mut["official"] = true
-                    mut["whitelisted"] = true
-                    mut["name"] = normalizedKey
-                    combined[normalizedKey] = mut
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("TokenRepo", "Error injecting tokens.json: ${e.message}")
-        }
-
-        // 3. Inject specialized hardcoded tokens
-        val useCfg = com.piggytrade.piggytrade.protocol.NetworkConfig.USE_CONFIG
-        combined["USE"] = useCfg.toMutableMap().apply {
-            put("official", true)
-            put("whitelisted", true)
-        }
-        
-        val dexyCfg = com.piggytrade.piggytrade.protocol.NetworkConfig.DEXYGOLD_CONFIG
-        combined["DexyGold"] = dexyCfg.toMutableMap().apply {
-            put("official", true)
-            put("whitelisted", true)
-        }
 
         return combined
     }
@@ -650,6 +673,35 @@ class TokenRepository(private val context: Context) {
         return (info?.get("decimals") as? Number)?.toInt() 
             ?: (info?.get("dec") as? Number)?.toInt() 
             ?: 0
+    }
+
+    /** Get pool NFT (pid) for a token by its display name */
+    fun getPoolNftForToken(tokenName: String): String? {
+        val data = tokens[tokenName] ?: return null
+        return data["pid"] as? String
+    }
+
+    /** Get decimals for a token by its display name */
+    fun getDecimalsForToken(tokenName: String): Int {
+        val data = tokens[tokenName] ?: return 0
+        return (data["dec"] as? Number)?.toInt() ?: 0
+    }
+
+    /** Get all token names that have a DEX pool (pid), sorted alphabetically.
+     *  Excludes T2T pairs (entries with "id_in" or pair-style names like "X-Y") — only ERG-based pools. */
+    fun getTokenNamesWithPools(): List<String> {
+        return tokens.entries
+            .filter { (name, data) ->
+                val pid = data["pid"] as? String
+                if (pid.isNullOrEmpty()) return@filter false
+                // Exclude T2T pairs — they have id_in and don't trade against ERG
+                if (data.containsKey("id_in")) return@filter false
+                // Exclude pair-style names like "Dort-Gort" (discovered T2T pools)
+                if (name.contains("-")) return@filter false
+                isPidWhitelisted(pid)
+            }
+            .map { it.key }
+            .sorted()
     }
 
     private var _tradeMapper: TradeMapper? = null

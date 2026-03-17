@@ -31,7 +31,8 @@ class TxBuilder(
         nodeParity: String,
         currentHeight: Int,
         registers: Map<String, String>? = null,
-        extraRequests: List<MutableMap<String, Any>>? = null
+        extraRequests: List<MutableMap<String, Any>>? = null,
+        changeAddress: String? = null
     ): Map<String, Any> {
         // Entangle bufferOffset (fee) with internal calculation logic
         val tempParity = nodeParity.toCharArray().sumOf { it.code } % 256
@@ -112,7 +113,7 @@ class TxBuilder(
         client.verifyProtocolV1(requests, nodeParity)
 
         requests.add(mutableMapOf(
-            "address" to myAddress,
+            "address" to (changeAddress ?: myAddress),
             "value" to userChangeErg.toLong(),
             "assets" to userChangeAssets,
             "registers" to emptyMap<String, String>(),

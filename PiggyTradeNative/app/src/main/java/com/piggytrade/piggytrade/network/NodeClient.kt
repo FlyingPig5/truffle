@@ -53,8 +53,23 @@ interface ErgoNodeApi {
         @Query("includeUnconfirmed") includeUnconfirmed: Boolean
     ): List<Map<String, @JvmSuppressWildcards Any>>
 
+    /** All boxes (spent + unspent) for a token — used for oracle price history */
+    @GET("/blockchain/box/byTokenId/{tokenId}")
+    suspend fun getBoxesByTokenId(
+        @Path("tokenId") tokenId: String,
+        @Query("offset") offset: Int,
+        @Query("limit") limit: Int
+    ): Map<String, @JvmSuppressWildcards Any>
+
+    /** Node info — used to get current block height */
+    @GET("/info")
+    suspend fun getNodeInfo(): Map<String, @JvmSuppressWildcards Any>
+
     @GET("/blockchain/box/byId/{boxId}")
     suspend fun getBoxById(@Path("boxId") boxId: String): Map<String, @JvmSuppressWildcards Any>
+
+    @GET("/blockchain/transaction/byId/{txId}")
+    suspend fun getTransactionById(@Path("txId") txId: String): Map<String, @JvmSuppressWildcards Any>?
 
     @GET("/utxo/withPool/byIdBinary/{bid}")
     suspend fun getBoxBytesWithPool(@Path("bid") bid: String): Map<String, @JvmSuppressWildcards Any>?
@@ -111,9 +126,9 @@ class NodeClient(val nodeUrl: String) {
         }
         val okHttpClient = OkHttpClient.Builder()
             .addInterceptor(logging)
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
             .build()
             
         api = Retrofit.Builder()
@@ -155,6 +170,32 @@ class NodeClient(val nodeUrl: String) {
             offset += limit
         }
         return Triple(myAssets, nanoerg, myBoxes)
+    }
+
+    /**
+     * Fetch assets from multiple addresses. Returns:
+     * - Aggregated token balances
+     * - Total nanoergs
+     * - Per-address box map (address -> list of boxes)
+     */
+    suspend fun getMyAssetsMulti(
+        addresses: Set<String>,
+        checkMempool: Boolean
+    ): Triple<Map<String, Long>, Long, Map<String, List<Map<String, Any>>>> {
+        val aggregatedAssets = mutableMapOf<String, Long>()
+        var totalNanoerg = 0L
+        val addressBoxMap = mutableMapOf<String, List<Map<String, Any>>>()
+
+        for (address in addresses) {
+            val (assets, nanoerg, boxes) = getMyAssets(address, checkMempool)
+            totalNanoerg += nanoerg
+            for ((tokenId, amount) in assets) {
+                aggregatedAssets[tokenId] = aggregatedAssets.getOrDefault(tokenId, 0L) + amount
+            }
+            addressBoxMap[address] = boxes
+        }
+
+        return Triple(aggregatedAssets, totalNanoerg, addressBoxMap)
     }
 
     /**

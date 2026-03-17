@@ -41,11 +41,23 @@ object NetworkConfig {
         SPECTRUM_ADDRESS to "DEX",
         SPECTRUM_TOKEN_ADDRESS to "DEX",
         (USE_CONFIG["pool_address"] as String) to "USE Pool",
+        (USE_CONFIG["lp_swap_address"] as String) to "DEX LP Swap",
         (DEXYGOLD_CONFIG["pool_address"] as String) to "DexyGold Pool",
+        (DEXYGOLD_CONFIG["lp_swap_address"] as String) to "DEX LP Swap",
+        // SigmaUSD
         "MUbV38YgqHy7XbsoXWF5z7EZm524Ybdwe5p9WDrbhruZRtehkRPT92imXer2eTkjwPDfboa1pR3zb3deVKVq3H7Xt98qcTqLuSBSbHb7izzo5jphEpcnqyKJ2xhmpNPVvmtbdJNdvdopPrHHDBbAGGeW7XYTQwEeoRfosXzcDtiGgw97b2aqjTsNFmZk7khBEQywjYfmoDc9nUCJMZ3vbSspnYo3LarLe55mh2Np8MNJqUN9APA6XkhZCrTTDRZb1B4krgFY1sVMswg2ceqguZRvC9pqt3tUUxmSnB24N6dowfVJKhLXwHPbrkHViBv1AKAJTmEaQW2DN1fRmD9ypXxZk8GXmYtxTtrj3BiunQ4qzUCu1eGzxSREjpkFSi2ATLSSDqUwxtRz639sHM6Lav4axoJNPCHbY8pvuBKUxgnGRex8LEGM8DeEJwaJCaoy8dBw9Lz49nq5mSsXLeoC4xpTUmp47Bh7GAZtwkaNreCu74m9rcZ8Di4w1cmdsiK1NWuDh9pJ2Bv7u3EfcurHFVqCkT3P86JUbKnXeNxCypfrWsFuYNKYqmjsix82g9vWcGMmAcu5nagxD4iET86iE2tMMfZZ5vqZNvntQswJyQqv2Wc6MTh4jQx1q2qJZCQe4QdEK63meTGbZNNKMctHQbp3gRkZYNrBtxQyVtNLR8xEY8zGp85GeQKbb37vqLXxRpGiigAdMe3XZA4hhYPmAAU5hpSMYaRAjtvvMT3bNiHRACGrfjvSsEG9G2zY5in2YWz5X9zXQLGTYRsQ4uNFkYoQRCBdjNxGv6R58Xq74zCgt19TxYZ87gPWxkXpWwTaHogG1eps8WXt8QzwJ9rVx6Vu9a5GjtcGsQxHovWmYixgBU8X9fPNJ9UQhYyAWbjtRSuVBtDAmoV1gCBEPwnYVP5GCGhCocbwoYhZkZjFZy6ws4uxVLid3FxuvhWvQrVEDYp7WRvGXbNdCbcSXnbeTrPMey1WPaXX" to "SigmaUSD Bank",
-        "L7ttnK2Comjkxxhyykdat7cCYLN7yrMJz6jCYmQGd5nu8Ma9mHi1JEiCNsxgmxAvDd5vuDMRkjiwQU11JHsizheespaEu4AaH41a2NzR2JbUsaTWVEg7jCBeMXCUbetnrsSLPCqZUb4PhnvE2sGV21E8LGyZyMjtWQqcauyB297d8d7aUCgKsbgZocqRsKZdeH185yxERavMEsb9R8ifqpbD4FVTNwWV6kixAQrMrwzp1wvheEk9t931iQXH9A2X4SJ4JR3eByqcHbWWAHoNs2gL2tpWa6fkVdCs2Kqgd7LgH7u9VFGEzACibuFzanQfNNZsic6Q1ndG97ebFoGVArfMNdvFMbxo1raYuqg4oFEeTY3aNXhhtgCfZWgt2AKz1mtKdZNLRBsWt83LKTiTQLrqBVNBurD2ojUnTV4r5deV" to "USE Bank",
+        // USE contracts
+        com.piggytrade.piggytrade.stablecoin.use.UseConfig.BANK_ADDRESS to "USE Bank",
+        com.piggytrade.piggytrade.stablecoin.use.UseConfig.FREEMINT_ADDRESS to "USE Freemint",
+        com.piggytrade.piggytrade.stablecoin.use.UseConfig.ARBMINT_ADDRESS to "USE Arbmint",
+        com.piggytrade.piggytrade.stablecoin.use.UseConfig.BUYBACK_ADDRESS to "USE Buyback",
+        // DexyGold contracts
+        com.piggytrade.piggytrade.stablecoin.dexygold.DexyGoldConfig.BANK_ADDRESS to "DexyGold Bank",
+        com.piggytrade.piggytrade.stablecoin.dexygold.DexyGoldConfig.FREEMINT_ADDRESS to "DexyGold Freemint",
+        com.piggytrade.piggytrade.stablecoin.dexygold.DexyGoldConfig.ARBMINT_ADDRESS to "DexyGold Arbmint",
+        com.piggytrade.piggytrade.stablecoin.dexygold.DexyGoldConfig.BUYBACK_ADDRESS to "DexyGold Buyback",
+        // Other
         "4EQTxw3MSn9fDbvzUN4qmbe6zFBp6M" to "Duckpools"
-
     )
 
     val DEFAULT_FAVORITES = listOf("ERG", "SigUSD", "USE", "DEXYGOLD", "rsADA", "kushti", "RSN","SigRSV")

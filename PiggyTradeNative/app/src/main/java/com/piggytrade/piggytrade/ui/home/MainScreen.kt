@@ -5,6 +5,7 @@ import com.piggytrade.piggytrade.ui.swap.*
 import com.piggytrade.piggytrade.ui.wallet.*
 import com.piggytrade.piggytrade.ui.settings.*
 import com.piggytrade.piggytrade.ui.bank.*
+import com.piggytrade.piggytrade.ui.portfolio.*
 import android.widget.Toast
 
 import androidx.compose.animation.AnimatedContent
@@ -71,8 +72,10 @@ fun MainScreen(
                     }
                     .blur(if (uiState.activeSelector != null) 10.dp else 0.dp)
             ) {
-                // Header with Wallet Selector, Logo, and Settings
-                WalletSelectorRow(uiState, viewModel, onNavigateToAddWallet, onNavigateToSettings)
+                // Header with Wallet Selector, Logo, and Settings (hidden on ecosystem tab)
+                if (uiState.activeTab != "ecosystem") {
+                    WalletSelectorRow(uiState, viewModel, onNavigateToAddWallet, onNavigateToSettings)
+                }
 
                 Spacer(modifier = Modifier.height(4.dp)) // Minimal middle gap
 
@@ -138,6 +141,12 @@ fun MainScreen(
                                  viewModel = viewModel,
                                  onSubmit = { showBetaDisclaimer = true }
                              )
+                        }
+                        "portfolio" -> Box(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp)) {
+                            PortfolioScreen(viewModel = viewModel)
+                        }
+                        "ecosystem" -> Box(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp)) {
+                            EcosystemScreen(viewModel = viewModel)
                         }
                         else -> Box(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp)) {
                             WalletInfoContent(

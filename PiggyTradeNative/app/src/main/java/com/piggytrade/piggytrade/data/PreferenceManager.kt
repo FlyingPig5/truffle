@@ -126,4 +126,34 @@ class PreferenceManager(context: Context) {
         val type = object : TypeToken<List<Map<String, Any>>>() {}.type
         return gson.fromJson(json, type)
     }
+
+    /**
+     * Persist per-wallet address selection config (which addresses are active + change address).
+     * Stored separately from encrypted wallet data so it can be changed without decryption.
+     */
+    fun saveWalletAddressConfig(walletName: String, selectedAddresses: Set<String>, changeAddress: String) {
+        val config = mapOf(
+            "selected" to selectedAddresses.toList(),
+            "change" to changeAddress
+        )
+        prefs.edit().putString("addr_config_$walletName", gson.toJson(config)).apply()
+    }
+
+    /**
+     * Load per-wallet address selection config.
+     * Returns (selectedAddresses, changeAddress). Empty set + empty string if not configured.
+     */
+    fun loadWalletAddressConfig(walletName: String): Pair<Set<String>, String> {
+        val json = prefs.getString("addr_config_$walletName", null) ?: return Pair(emptySet(), "")
+        return try {
+            val type = object : TypeToken<Map<String, Any>>() {}.type
+            val config: Map<String, Any> = gson.fromJson(json, type)
+            @Suppress("UNCHECKED_CAST")
+            val selected = (config["selected"] as? List<String>)?.toSet() ?: emptySet()
+            val change = config["change"] as? String ?: ""
+            Pair(selected, change)
+        } catch (e: Exception) {
+            Pair(emptySet(), "")
+        }
+    }
 }

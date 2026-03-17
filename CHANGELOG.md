@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.8.0 — 2026-03-17
+### Major Features
+- **Ecosystem Activity Tab**: Entirely new "Ecosystem" tab added to the bottom navigation bar. Displays a live, paginated feed of all on-chain protocol activity: DEX swaps (Spectrum), LP swaps (USE LP, DexyGold LP), stablecoin mints/redeems (SigUSD, SigRSV, USE, DexyGold, FreeMint, ArbMint), and ERG stake / oracle actions. Transactions are sorted by recency with pull-to-refresh and infinite-scroll pagination.
+- **Portfolio Overview Tab**: New "Portfolio" tab showing wallet token balances enriched with live DEX-derived USD values. Each token shows ERG price and calculated $USE value using the on-chain USE oracle rate.
+- **ERG/USD Price Chart**: Swipeable chart card showing ERG price history using on-chain USE oracle price data, SigUSD oracle price, and SigUSD DEX price as three individually toggleable data series (SigUSD lines hidden by default; USE visible by default). Supports 24H, 7D, 30D, 3M, 6M, 1Y, 3Y, and MAX time ranges.
+- **Token Pair Price Chart**: Selecting any DEX token from a dropdown in the chart card loads its pool's historical price (ERG per token) from pool state boxes. Chart auto-switches to the selected pair with a custom range-sampled line.
+- **Latest Pool Trades**: When a token pair is selected in the chart, a new "Latest Trades" filter chip appears and is auto-selected. Shows the last ~15 trades derived from consecutive DEX pool state boxes — including BUY/SELL direction, ERG and token amounts, trader address (first 10 chars), relative time ("2m ago"), and a direct explorer link.
+- **OraclePriceStore**: New dedicated store (`OraclePriceStore.kt`) that maintains in-memory price history for USE oracle, SigUSD oracle, and SigUSD DEX, serving chart data via configurable sampling.
+- **NodePool**: New `NodePool.kt` multi-node manager that round-robins API calls across a pool of nodes, automatically skipping nodes that fail or time out.
+
+### Enhancements
+- **DEX Swap Color Coding**: Distinct colors for each swap type — Spectrum DEX Swap (cyan), USE LP Swap (light blue), DexyGold LP Swap (amber). Both EcosystemScreen and PortfolioScreen use the new palette.
+- **Accurate LP Swap Labeling**: LP swap transactions now correctly identify USE vs DexyGold by inspecting pool NFT assets within the transaction, eliminating mislabeling.
+- **Activity Filter Chips**: Ecosystem feed has filterable tabs — All, DEX Swaps, Stablecoins — plus a context-aware "Latest Trades" chip that appears only when a token pair is selected.
+- **DEX Price in $USE**: Portfolio overview now shows each token's ERG price AND its calculated $USE value (e.g., "0.032 $USE"), rounded to 3 decimal places.
+- **Chart Readability**: Improved chart date label and price tag font sizes. Added padding below the lowest price so the line doesn't hug the axis. Current-price tag uses a semi-transparent dark-blue background for legibility.
+- **Bank Protocol Status UI**: Blocked operations now integrate their reason directly into an expandable "Protocol Status" section with an orange border and pulsing indicator. Auto-expands when mint/redeem is blocked. Header text changes to "MINT BLOCKED — TAP FOR DETAILS" or "REDEEM BLOCKED — TAP FOR DETAILS".
+- **TVL Section**: Ecosystem tab pager includes a TVL (Total Value Locked) swipeable page alongside the price chart.
+- **Icon Padding**: Improved centering of DEX bank icons with horizontal padding in both EcosystemScreen and PortfolioScreen transaction rows.
+- **Node API Extension**: Added `GET /blockchain/transaction/byId/{txId}` endpoint to `NodeClient` for resolving trader addresses from pool swap transactions.
+
+### Bug Fixes
+- **Ecosystem Tx Loading State**: Loading indicator correctly distinguishes between initial load (full-screen spinner) and pagination (inline spinner at bottom of list).
+- **Pool Trade Enrichment**: Trader addresses are resolved in a two-phase approach — pool-box deltas appear immediately, then tx-fetched addresses and real timestamps update the list asynchronously without blocking the UI.
+
+## 0.7.5
+### Major Features
+- **Multi-Address Wallet Support (EIP-3)**: Mnemonic wallets now automatically scan derivation paths on import, discovering all active addresses (gap limit = 5). A new "Addresses" tab in the wallet screen lets users toggle which addresses are active, set a change address, add new derivation indices, and remove unused ones. Balances and transaction history aggregate across all selected addresses.
+- **Transaction Review Redesign**: The swap confirmation screen now dynamically parses the prepared transaction data and shows a per-address net-change breakdown. Each address is labeled as YOUR WALLET, CONTRACT, APP FEE, MINER FEE, or EXTERNAL, with green/red coloring for gains/losses.
+- **Network Security Toggle**: Added a "Allow HTTP Nodes" setting under Settings → Network Security. HTTP nodes are blocked by default; enabling requires explicit user acknowledgment via a security warning dialog. Unencrypted traffic warnings are shown when enabled.
+
+### Enhancements
+- **Bank Miner Fee Slider**: The Bank (Stablecoins) order details now include a Slow ↔ Fast miner fee slider (0.0011–0.2 ERG range), matching the DEX order details. Adjusting it affects the actual transaction fee for SigUSD, SigRSV, USE, and DexyGold mint/redeem operations.
+- **Wallet Token Display**: Removed the expand/collapse toggle for token lists in the wallet screen — all tokens now display directly without truncation.
+- **Transaction Detail Collapse**: Individual transaction inputs and outputs with ≥5 tokens now have a collapsible toggle showing the first 4 tokens with a "+N more tokens" link.
+- **Favorites Toggle**: Added a "Show Favorites" setting to hide/show the favorites bar on the DEX screen. Disabled by default, persisted across sessions. The swap arrow offset adjusts dynamically when hidden.
+- **Compact Top Bar**: Redesigned the top bar to a slimmer layout with just the Piggy icon on the left and loading/settings on the right, freeing vertical screen space.
+- **Compact Bottom Nav**: Reduced the vertical height of the bottom navigation bar while preserving icon sizes for more screen real estate.
+- **Removed Experimental Banner**: Removed the red "Experimental" warning banner from the Bank screen.
+- **Debug Mode Toggle Removed from DEX**: The "Check TX" / "LIVE" toggle buttons have been removed from the main DEX tab — simulation mode is now exclusively controlled via Settings → Advanced.
+
+### Bug Fixes
+- **Token Selector Pair Leak (Critical)**: Fixed T2T pair names (e.g., "GORT-SigUSD", "Erdoge-kushti", "DORT-GORT") appearing as individually selectable tokens in the swap FROM/TO selector. Root cause: `tokens.json` entries for T2T pairs only contain `pid` (no `id_in`/`id_out`), so they bypassed the T2T filter. Fixed with a three-layer approach:
+  - `loadCombinedTokens()` now loads `tokens.json` first as an immutable foundation, then merges synced data alongside without overwriting official keys. Synced T2T data enriches official entries with `id_in`/`id_out` fields.
+  - `isTokenToToken()` enhanced with a heuristic: if a hyphenated name has both halves existing as separate individual token entries, it's identified as a T2T pair.
+  - `loadPoolMappings()` uses the enhanced check on both key and display name.
+- **Unverified Wallet Token Leaking**: Wallet tokens that only exist in T2T discovered pools (not direct ERG pools) no longer appear as selectable swap assets.
+- **Node List Updated**: Replaced HTTP-only public nodes with HTTPS alternatives. Added `ergo-node-5.eutxo.de` and `node.ergo.watch`. Removed deprecated Cornell nodes.
+- **`loadCombinedTokens()` Rewrite**: Complete restructure of the token loading pipeline — official tokens are now an immutable foundation loaded first, synced data enriches but never overwrites official entries, and non-official synced entries that collide with official names are suffixed.
+
+
 ## 0.7.0
 ### Enhancements
 - **Bank UI Overhaul**: Redesigned the Bank (Stablecoins) screen with a cleaner layout — user enters desired mint amount first, with cost summary below.

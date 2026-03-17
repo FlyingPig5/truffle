@@ -51,6 +51,7 @@ fun SettingsScreen(
     var showImportConfirm by remember { mutableStateOf(false) }
     var showSyncConfirm by remember { mutableStateOf(false) }
     var showHttpWarning by remember { mutableStateOf(false) }
+    var showClearOracleConfirm by remember { mutableStateOf(false) }
     var pendingImportJson by remember { mutableStateOf("") }
 
     val importLauncher = rememberLauncherForActivityResult(
@@ -520,6 +521,38 @@ fun SettingsScreen(
                     )
                 }
 
+                // Oracle Data Section
+                Text(
+                    text = "ORACLE DATA",
+                    color = ColorText,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 20.dp, bottom = 5.dp, start = 10.dp)
+                )
+
+                TogaRow(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .androidBorder(radius = 10.dp, borderWidth = 0.dp, bgColor = Color(0xFF9E1F1F))
+                            .clickable { showClearOracleConfirm = true }
+                            .padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("Clear Oracle Cache", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Text(
+                    text = "Deletes locally cached oracle and token price data. The next app start will re-sync ~1 year " +
+                           "of on-chain data which takes about 1-2 minutes.",
+                    color = ColorTextDim,
+                    fontSize = 10.sp,
+                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp)
+                )
+
             }
         }
     }
@@ -695,6 +728,38 @@ fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showHttpWarning = false }) {
+                    Text("Cancel", color = Color.White)
+                }
+            }
+        )
+    }
+
+    if (showClearOracleConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearOracleConfirm = false },
+            title = { Text("Clear Oracle Cache?", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "This will delete all locally cached price data (USE, SigUSD, and all token pairs).\n\n" +
+                    "The next time you open Portfolio, the app will re-download approximately " +
+                    "1 year of on-chain price history for any token you view. " +
+                    "This takes about 1-2 minutes on first sync.\n\n" +
+                    "Only do this if the chart data looks incorrect.",
+                    color = Color.White,
+                    fontSize = 14.sp
+                )
+            },
+            containerColor = ColorCard,
+            confirmButton = {
+                TextButton(onClick = {
+                    showClearOracleConfirm = false
+                    viewModel.clearAndResync()
+                }) {
+                    Text("CLEAR DATA", color = ColorSent, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearOracleConfirm = false }) {
                     Text("Cancel", color = Color.White)
                 }
             }
