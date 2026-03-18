@@ -71,8 +71,6 @@ Import a mnemonic and the app automatically scans your derivation path to find *
 
 | Protocol | Fee |
 |---|---|
-| SigmaUSD / SigRSV | 2% (AgeUSD on-chain protocol fee) |
-| USE / DexyGold | 0.5% (0.3% bank + 0.2% buyback) |
 | App fee | 0.1% of transaction value |
 
 ---
