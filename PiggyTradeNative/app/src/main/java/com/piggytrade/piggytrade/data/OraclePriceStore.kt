@@ -106,16 +106,42 @@ class OraclePriceStore(private val context: Context) {
         if (BuildConfig.DEBUG) Log.d(TAG, "Loaded: USE=${useOracle.prices.size} SigUSD=${sigUsdOracle.prices.size} DEX=${sigUsdDex.prices.size} firstSync=$isFirstSync")
     }
 
+    /**
+     * Resilient API fetch — retries indefinitely with different nodes from the pool.
+     * Only CancellationException breaks the loop. Uses exponential backoff (2s, 4s, 8s, max 30s).
+     */
+    @Suppress("UNCHECKED_CAST")
+    private suspend fun <T> resilientFetch(
+        nodePool: NodePool,
+        label: String,
+        block: suspend (NodeClient) -> T
+    ): T {
+        var attempt = 0
+        while (true) {
+            val client = nodePool.next()
+            try {
+                return block(client)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                attempt++
+                val delay = minOf(2000L * (1L shl minOf(attempt - 1, 4)), 30_000L)
+                if (BuildConfig.DEBUG) Log.d(TAG, "$label: attempt $attempt failed (${e.message}), retrying in ${delay}ms")
+                kotlinx.coroutines.delay(delay)
+            }
+        }
+    }
+
     /** Sync all sources from the node. Call on startup. */
     @Suppress("UNCHECKED_CAST")
-    suspend fun syncAll(client: NodeClient) {
+    suspend fun syncAll(nodePool: NodePool) {
         try {
             // Show progress immediately so UI reacts right away
             syncProgressLabel = if (isFirstSync) "First sync — fetching 1 year of price data..." else "Checking for new price data..."
             syncProgressPercent = -1f  // indeterminate while connecting
 
-            // Get current block height
-            val info = client.api.getNodeInfo()
+            // Get current block height (resilient — retries indefinitely)
+            val info = resilientFetch(nodePool, "height") { it.api.getNodeInfo() }
             currentHeight = (info["fullHeight"] as? Number)?.toInt() ?: 0
             if (currentHeight == 0) {
                 syncProgressLabel = ""
@@ -131,7 +157,7 @@ class OraclePriceStore(private val context: Context) {
             }
             syncProgressPercent = 0f
             if (BuildConfig.DEBUG) Log.d(TAG, "Starting USE sync: complete=${useOracle.syncComplete} offset=${useOracle.lastScanOffset} prices=${useOracle.prices.size}")
-            syncOracle(client, USE_ORACLE_NFT, useOracle, "oracle_use.json", "USE")
+            syncOracle(nodePool, USE_ORACLE_NFT, useOracle, "oracle_use.json", "USE")
 
             if (sigUsdOracle.syncComplete) {
                 syncProgressLabel = "Updating SigUSD oracle..."
@@ -141,7 +167,7 @@ class OraclePriceStore(private val context: Context) {
             }
             syncProgressPercent = 0f
             if (BuildConfig.DEBUG) Log.d(TAG, "Starting SigUSD sync: complete=${sigUsdOracle.syncComplete} offset=${sigUsdOracle.lastScanOffset} prices=${sigUsdOracle.prices.size}")
-            syncOracle(client, SIGUSD_ORACLE_NFT, sigUsdOracle, "oracle_sigusd.json", "SigUSD")
+            syncOracle(nodePool, SIGUSD_ORACLE_NFT, sigUsdOracle, "oracle_sigusd.json", "SigUSD")
 
             if (sigUsdDex.syncComplete) {
                 syncProgressLabel = "Updating SigUSD DEX..."
@@ -151,12 +177,12 @@ class OraclePriceStore(private val context: Context) {
             }
             syncProgressPercent = 0f
             if (BuildConfig.DEBUG) Log.d(TAG, "Starting SigUSD DEX sync: complete=${sigUsdDex.syncComplete} offset=${sigUsdDex.lastScanOffset} prices=${sigUsdDex.prices.size}")
-            syncDexPool(client, SIGUSD_DEX_POOL_NFT, sigUsdDex, "dex_sigusd.json")
+            syncDexPool(nodePool, SIGUSD_DEX_POOL_NFT, sigUsdDex, "dex_sigusd.json")
 
             syncProgressLabel = ""
             syncProgressPercent = -1f
 
-            // Verify all oracle syncs completed — if any failed mid-sync, signal failure
+            // Verify all oracle syncs completed
             val incomplete = mutableListOf<String>()
             if (!useOracle.syncComplete) incomplete.add("USE")
             if (!sigUsdOracle.syncComplete) incomplete.add("SigUSD")
@@ -167,6 +193,8 @@ class OraclePriceStore(private val context: Context) {
             }
 
             if (BuildConfig.DEBUG) Log.d(TAG, "All oracle syncs complete")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             if (BuildConfig.DEBUG) Log.d(TAG, "Sync failed: ${e.message}")
             syncProgressLabel = ""
@@ -228,29 +256,26 @@ class OraclePriceStore(private val context: Context) {
     /** Sync a single oracle's price history */
     @Suppress("UNCHECKED_CAST")
     private suspend fun syncOracle(
-        client: NodeClient, nft: String, history: PriceHistory,
+        nodePool: NodePool, nft: String, history: PriceHistory,
         filename: String, label: String
     ) {
         try {
             val newPoints = mutableListOf<PricePoint>()
-            // Resume from last scan position if previous sync was interrupted
             var offset = if (!history.syncComplete && history.lastScanOffset > 0) history.lastScanOffset else 0
             val pageSize = 100
             var done = false
             var totalBoxes = 0
-            // Capture the stop-height BEFORE the loop so that incremental checkpoint saves
-            // (which update lastHeight) don't affect the break condition.
             val breakAtHeight = history.lastHeight
-            // If previous sync didn't complete, find lowest cached height to know where to resume
             val canBreakAtCached = history.syncComplete
             val lowestCachedHeight = if (!canBreakAtCached && history.prices.isNotEmpty())
                 history.prices.minOf { it.height } else 0
-            // Adaptive gap: ~15 min (8 blocks) for last 24h, ~6h (180 blocks) for older data
             val height24h = if (currentHeight > 720) currentHeight - 720 else 0
             var lastStoredHeight = Int.MAX_VALUE
 
             while (!done) {
-                val resp = client.api.getBoxesByTokenId(nft, offset, pageSize)
+                val resp = resilientFetch(nodePool, "$label@$offset") { client ->
+                    client.api.getBoxesByTokenId(nft, offset, pageSize)
+                }
                 val items = resp["items"] as? List<Map<String, Any>> ?: break
 
                 for (box in items) {
@@ -327,7 +352,7 @@ class OraclePriceStore(private val context: Context) {
     /** Sync SigUSD DEX pool price history (spot price from reserves) */
     @Suppress("UNCHECKED_CAST")
     private suspend fun syncDexPool(
-        client: NodeClient, poolNft: String, history: PriceHistory, filename: String
+        nodePool: NodePool, poolNft: String, history: PriceHistory, filename: String
     ) {
         try {
             val newPoints = mutableListOf<PricePoint>()
@@ -343,7 +368,9 @@ class OraclePriceStore(private val context: Context) {
             var lastStoredHeight = Int.MAX_VALUE
 
             while (!done) {
-                val resp = client.api.getBoxesByTokenId(poolNft, offset, pageSize)
+                val resp = resilientFetch(nodePool, "SigUSD DEX@$offset") { client ->
+                    client.api.getBoxesByTokenId(poolNft, offset, pageSize)
+                }
                 val items = resp["items"] as? List<Map<String, Any>> ?: break
 
                 for (box in items) {
@@ -415,7 +442,7 @@ class OraclePriceStore(private val context: Context) {
      */
     @Suppress("UNCHECKED_CAST")
     suspend fun syncTokenDex(
-        client: NodeClient, tokenName: String, poolNft: String, tokenDecimals: Int,
+        nodePool: NodePool, tokenName: String, poolNft: String, tokenDecimals: Int,
         onCheckpoint: (() -> Unit)? = null
     ) {
         isTokenSyncing = true
@@ -453,17 +480,15 @@ class OraclePriceStore(private val context: Context) {
             val needsVolumeBackfill = canBreakAtCached && history.volumes.count { it.height >= height7d } < 5
 
             if (currentHeight == 0) {
-                try {
-                    val info = client.api.getNodeInfo()
-                    currentHeight = (info["fullHeight"] as? Number)?.toInt() ?: 0
-                    if (BuildConfig.DEBUG) Log.d(TAG, "syncTokenDex: fetched height $currentHeight")
-                } catch (e: Exception) {
-                    if (BuildConfig.DEBUG) Log.d(TAG, "syncTokenDex: failed to fetch height: ${e.message}")
-                }
+                val info = resilientFetch(nodePool, "$tokenName height") { it.api.getNodeInfo() }
+                currentHeight = (info["fullHeight"] as? Number)?.toInt() ?: 0
+                if (BuildConfig.DEBUG) Log.d(TAG, "syncTokenDex: fetched height $currentHeight")
             }
 
             while (!done) {
-                val resp = client.api.getBoxesByTokenId(poolNft, offset, pageSize)
+                val resp = resilientFetch(nodePool, "$tokenName@$offset") { client ->
+                    client.api.getBoxesByTokenId(poolNft, offset, pageSize)
+                }
                 val items = resp["items"] as? List<Map<String, Any>> ?: break
 
                 for (box in items) {
@@ -608,6 +633,22 @@ class OraclePriceStore(private val context: Context) {
     }
 
     /**
+     * Rebuild market data from cached files on disk — NO network calls.
+     * Used on startup to show existing market data before user triggers a manual sync.
+     */
+    fun rebuildMarketDataFromCache(tokens: List<Triple<String, String, Int>>) {
+        for ((name, _, _) in tokens) {
+            val filename = "dex_${name.lowercase().replace(" ", "_")}.json"
+            val cached = loadFromFile(filename)
+            if (cached.prices.isNotEmpty()) {
+                tokenDexData[name] = cached
+            }
+        }
+        allTokenMarketData = tokenDexData.keys.mapNotNull { computeMarketData(it) }
+            .sortedByDescending { it.volume7dErg }
+    }
+
+    /**
      * Background sync ALL whitelisted tokens' price + volume data.
      * Uses multiple nodes in parallel for faster syncing.
      * tokens: List<Triple<name, poolNft, decimals>>
@@ -670,26 +711,15 @@ class OraclePriceStore(private val context: Context) {
             if (BuildConfig.DEBUG) Log.d(TAG, "Syncing ${remaining.size} tokens across $parallelism nodes")
 
             coroutineScope {
-                chunks.mapIndexed { chunkIdx, chunk ->
-                    // Each chunk starts with its own node; on per-token failure it rotates
-                    var chunkClient = nodePool.next()
+                chunks.map { chunk ->
                     async(Dispatchers.IO) {
                         for ((name, poolNft, decimals) in chunk) {
                             try {
-                                // 8s hard timeout per token — each page fetch should be fast;
-                                // if a node hangs on a connection, we rotate immediately
-                                kotlinx.coroutines.withTimeout(8_000L) {
-                                    syncTokenDex(chunkClient, name, poolNft, decimals)
-                                }
+                                syncTokenDex(nodePool, name, poolNft, decimals)
                             } catch (e: kotlinx.coroutines.CancellationException) {
                                 throw e
-                            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                                if (BuildConfig.DEBUG) Log.d(TAG, "syncAllTokens: $name timed out, rotating node")
-                                // Rotate to a fresh node so the next token isn't stuck on the same bad node
-                                chunkClient = nodePool.next()
                             } catch (e: Exception) {
-                                if (BuildConfig.DEBUG) Log.d(TAG, "syncAllTokens: $name failed: ${e.message}, rotating node")
-                                chunkClient = nodePool.next()
+                                if (BuildConfig.DEBUG) Log.d(TAG, "syncAllTokens: $name failed: ${e.message}")
                             }
 
                             val done = completedCount.incrementAndGet()

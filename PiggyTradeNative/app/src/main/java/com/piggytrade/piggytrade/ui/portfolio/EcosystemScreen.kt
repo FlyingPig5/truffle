@@ -3,6 +3,8 @@ package com.piggytrade.piggytrade.ui.portfolio
 import com.piggytrade.piggytrade.ui.theme.*
 import com.piggytrade.piggytrade.ui.swap.SwapViewModel
 import com.piggytrade.piggytrade.ui.swap.EcosystemTx
+import com.piggytrade.piggytrade.ui.home.MarketSyncButton
+import com.piggytrade.piggytrade.ui.home.MarketSyncDialog
 
 import android.content.Intent
 import android.graphics.Bitmap
@@ -175,58 +177,21 @@ fun EcosystemScreen(viewModel: SwapViewModel) {
                 }
             }
 
-            // ── Sync progress bar (visible on all tabs when syncing) ──
+            // ── Market Sync Button (replaces inline sync bar) ──
+            var showSyncDialog by remember { mutableStateOf(false) }
             val store = viewModel.oraclePriceStore
-            val showSyncBar = store.isSyncingAllTokens || store.syncProgressLabel.isNotEmpty()
-            if (showSyncBar) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(ColorInputBg.copy(alpha = 0.6f))
-                        .padding(horizontal = 10.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(10.dp),
-                        color = ColorAccent, strokeWidth = 1.5.dp
-                    )
-                    if (store.isSyncingAllTokens) {
-                        val idx = store.allTokenSyncIndex
-                        val total = store.allTokenSyncTotal
-                        val label = store.allTokenSyncLabel
-                        Text(
-                            "Syncing $label ($idx/$total)" +
-                                (if (store.syncProgressLabel.isNotEmpty()) " — ${store.syncProgressLabel}" else ""),
-                            color = ColorAccent, fontSize = 9.sp, fontWeight = FontWeight.Bold
-                        )
-                        if (total > 0) {
-                            LinearProgressIndicator(
-                                progress = { (idx.toFloat() / total.toFloat()).coerceIn(0f, 1f) },
-                                modifier = Modifier.weight(1f).height(3.dp),
-                                color = ColorAccent,
-                                trackColor = ColorInputBg
-                            )
-                        }
-                    } else {
-                        // Oracle/individual token sync
-                        Text(
-                            store.syncProgressLabel,
-                            color = ColorAccent, fontSize = 9.sp, fontWeight = FontWeight.Bold
-                        )
-                        val pct = store.syncProgressPercent
-                        if (pct >= 0f) {
-                            LinearProgressIndicator(
-                                progress = { pct.coerceIn(0f, 1f) },
-                                modifier = Modifier.weight(1f).height(3.dp),
-                                color = ColorAccent,
-                                trackColor = ColorInputBg
-                            )
-                        }
-                    }
-                }
+
+            MarketSyncButton(
+                viewModel = viewModel,
+                onClick = { showSyncDialog = true }
+            )
+
+            if (showSyncDialog) {
+                MarketSyncDialog(
+                    viewModel = viewModel,
+                    isFirstSync = uiState.lastMarketSyncMs == 0L && uiState.marketSyncIncomplete,
+                    onDismiss = { showSyncDialog = false }
+                )
             }
 
             // Filter chips: DEX Swaps | Stablecoins | Market [| Latest Trades (token only)]

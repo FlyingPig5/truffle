@@ -553,8 +553,9 @@ fun NetworkTradeHistoryItemView(trade: NetworkTransaction, viewModel: SwapViewMo
                     item {
                         Text("From:", color = ColorAccent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     }
+                    val myWalletAddrs = viewModel.uiState.value.walletAddresses.toSet()
                     items(trade.inputs) { inp ->
-                        CollapsibleBoxRow(inp, viewModel)
+                        CollapsibleBoxRow(inp, viewModel, myWalletAddrs)
                     }
                     
                     item {
@@ -562,7 +563,7 @@ fun NetworkTradeHistoryItemView(trade: NetworkTransaction, viewModel: SwapViewMo
                         Text("To:", color = ColorAccent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     }
                     items(trade.outputs) { out ->
-                        CollapsibleBoxRow(out, viewModel)
+                        CollapsibleBoxRow(out, viewModel, myWalletAddrs)
                     }
                 }
             },
@@ -619,13 +620,37 @@ fun TokenBalanceItem(tokenId: String, amount: Long, viewModel: SwapViewModel) {
 }
 
 @Composable
-fun CollapsibleBoxRow(box: TxBox, viewModel: SwapViewModel) {
+fun CollapsibleBoxRow(box: TxBox, viewModel: SwapViewModel, myAddresses: Set<String> = emptySet()) {
     var isExpanded by remember { mutableStateOf(false) }
     val threshold = 5
+    val isMine = box.address in myAddresses
 
-    Column(modifier = Modifier.padding(vertical = 5.dp)) {
-        val addr = if (box.address.length > 20) box.address.take(10) + "..." + box.address.takeLast(10) else box.address
-        Text(addr, color = ColorTextDim, fontSize = 10.sp)
+    Column(
+        modifier = Modifier
+            .padding(vertical = 5.dp)
+            .then(
+                if (isMine) Modifier
+                    .background(Color.Green.copy(alpha = 0.06f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                else Modifier
+            )
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val addr = if (box.address.length > 20) box.address.take(10) + "..." + box.address.takeLast(10) else box.address
+            Text(addr, color = if (isMine) Color.Green.copy(alpha = 0.7f) else ColorTextDim, fontSize = 10.sp)
+            if (isMine) {
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "You",
+                    color = Color.Green,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .background(Color.Green.copy(alpha = 0.15f), RoundedCornerShape(3.dp))
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                )
+            }
+        }
         Text("${SwapViewModel.formatErg(box.value.toDouble() / 1_000_000_000.0)} ERG", color = Color.White, fontSize = 12.sp)
 
         val assetsToShow = if (box.assets.size >= threshold && !isExpanded) box.assets.take(threshold - 1) else box.assets
