@@ -200,10 +200,22 @@ fun SendReviewScreen(
 
             if (showDetails) {
                 item {
-                    TransactionAddressBreakdown(
-                        txData = uiState.sendPreparedTxData,
-                        viewModel = viewModel,
-                        serviceFee = 0.0
+                    val (inputs, outputs) = remember(uiState.sendPreparedTxData) {
+                        parsePreparedTxData(uiState.sendPreparedTxData)
+                    }
+                    val walletAddrs = remember(uiState.walletAddresses, uiState.selectedAddress, uiState.changeAddress) {
+                        val addrs = mutableSetOf<String>()
+                        addrs.addAll(uiState.walletAddresses)
+                        if (uiState.selectedAddress.isNotEmpty()) addrs.add(uiState.selectedAddress)
+                        if (uiState.changeAddress.isNotEmpty()) addrs.add(uiState.changeAddress)
+                        addrs
+                    }
+
+                    TransactionDetailsView(
+                        inputs = inputs,
+                        outputs = outputs,
+                        walletAddresses = walletAddrs,
+                        viewModel = viewModel
                     )
                     Spacer(Modifier.height(10.dp))
                 }

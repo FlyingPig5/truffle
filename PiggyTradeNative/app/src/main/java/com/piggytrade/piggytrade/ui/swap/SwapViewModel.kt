@@ -1466,6 +1466,16 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         return getWalletData(name)?.get("address") as? String ?: ""
     }
 
+    /** Fetch a box from the blockchain by its box ID. Returns the box data map or null. */
+    suspend fun fetchBoxById(boxId: String): Map<String, Any>? {
+        return try {
+            nodeClient?.api?.getBoxById(boxId)
+        } catch (e: Exception) {
+            android.util.Log.w("SwapViewModel", "fetchBoxById($boxId) failed: ${e.message}")
+            null
+        }
+    }
+
     fun deleteWallet(name: String) {
         val rawName = name.replace(" (Ergopay)", "").trim()
         val wallets = preferenceManager.loadWallets().toMutableMap()

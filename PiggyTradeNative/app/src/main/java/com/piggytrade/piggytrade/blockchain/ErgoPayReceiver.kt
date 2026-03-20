@@ -24,7 +24,8 @@ class ErgoPayReceiver {
         val isConnectRequest: Boolean = false,
         val message: String? = null,
         val messageSeverity: String? = null,
-        val replyToUrl: String? = null
+        val replyToUrl: String? = null,
+        val addresses: List<String> = emptyList()  // EIP-0020: dApp-specified address(es)
     )
 
     /** Check if URL needs an address substituted before fetching */
@@ -156,6 +157,19 @@ class ErgoPayReceiver {
                     val severity = jsonObject.get("messageSeverity")?.let { if (it.isJsonNull) null else it.asString }
                     val replyTo = jsonObject.get("replyTo")?.let { if (it.isJsonNull) null else it.asString }
 
+                    // EIP-0020: dApp can specify which address(es) to use
+                    val addresses = mutableListOf<String>()
+                    jsonObject.get("addresses")?.let { el ->
+                        if (!el.isJsonNull && el.isJsonArray) {
+                            el.asJsonArray.forEach { addresses.add(it.asString) }
+                        }
+                    }
+                    jsonObject.get("address")?.let { el ->
+                        if (!el.isJsonNull && addresses.isEmpty()) {
+                            addresses.add(el.asString)
+                        }
+                    }
+
                     // If severity is ERROR and no TX, it's a server error
                     if (reducedTx.isNullOrBlank() && severity == "ERROR") {
                         throw Exception("ErgoPay error: ${message ?: "Unknown error"}")
@@ -170,7 +184,8 @@ class ErgoPayReceiver {
                         isConnectRequest = isConnect,
                         message = message,
                         messageSeverity = severity,
-                        replyToUrl = replyTo
+                        replyToUrl = replyTo,
+                        addresses = addresses
                     )
                 } catch (e: com.google.gson.JsonSyntaxException) {
                     // Not JSON → treat as raw base64 reduced TX

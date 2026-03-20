@@ -36,7 +36,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private data class ErgoPayTxDetails(
-    val inputs: List<String>,
+    val inputBoxIds: List<String>,        // raw box IDs from reduced TX
+    val inputs: List<ErgoPayOutput>,       // resolved input boxes (fetched from node)
     val outputs: List<ErgoPayOutput>
 )
 
@@ -56,13 +57,17 @@ private sealed class SignResult {
     data class Failed(val error: String) : SignResult()
 }
 
+/**
+ * Net-change summary computed from inputs AND outputs.
+ * Positive netErg = you are receiving ERG; negative = you are sending ERG.
+ * Same for tokens.
+ */
 private data class TxSummary(
-    val sendingErg: Double,
-    val receivingErg: Double,
-    val sendingTokens: List<Pair<String, Long>>,
-    val receivingTokens: List<Pair<String, Long>>,
+    val netErg: Double,                      // + = receiving, - = sending
+    val netTokens: Map<String, Long>,        // tokenName → net amount (+ receiving, - sending)
     val minerFee: Double,
-    val externalAddresses: List<String>
+    val externalAddresses: List<String>,      // non-wallet, non-miner output addresses
+    val inputsResolved: Boolean              // whether we managed to fetch input data
 )
 
 /** Top-level screen state */
@@ -132,42 +137,76 @@ fun ErgoPayReviewScreen(
         ErgoPayReceiver().isAddressRequest(ergoPayUrl)
     }
 
-    // Summary computed from TX details
+    // Compute net-change summary from inputs AND outputs
     val summary = remember(txDetails, walletAddress) {
         val details = txDetails ?: return@remember null
-        var sendErg = 0.0; var receiveErg = 0.0; var minerFee = 0.0
-        val sendTokens = mutableMapOf<String, Long>()
-        val recvTokens = mutableMapOf<String, Long>()
-        val externalAddrs = mutableListOf<String>()
-        for (output in details.outputs) {
-            val ergVal = output.valueNano / 1_000_000_000.0
-            val isMinerFee = output.valueNano in 1_000_000L..2_000_000L && output.tokens.isEmpty()
-            val isWallet = output.address == walletAddress
-            when {
-                isMinerFee -> minerFee += ergVal
-                isWallet -> {
-                    receiveErg += ergVal
-                    for (tok in output.tokens) {
-                        val name = viewModel.getTokenName(tok.tokenId).ifEmpty { "${tok.tokenId.take(8)}..." }
-                        recvTokens[name] = (recvTokens[name] ?: 0L) + tok.amount
-                    }
-                }
-                else -> {
-                    sendErg += ergVal
-                    if (output.address !in externalAddrs) externalAddrs.add(output.address)
-                    for (tok in output.tokens) {
-                        val name = viewModel.getTokenName(tok.tokenId).ifEmpty { "${tok.tokenId.take(8)}..." }
-                        sendTokens[name] = (sendTokens[name] ?: 0L) + tok.amount
-                    }
+
+        // Sum up what the wallet is SPENDING (inputs from wallet)
+        var inputErgFromWallet = 0L
+        val inputTokensFromWallet = mutableMapOf<String, Long>()
+        val inputsResolved = details.inputs.isNotEmpty()
+
+        for (input in details.inputs) {
+            if (input.address == walletAddress) {
+                inputErgFromWallet += input.valueNano
+                for (tok in input.tokens) {
+                    inputTokensFromWallet[tok.tokenId] = (inputTokensFromWallet[tok.tokenId] ?: 0L) + tok.amount
                 }
             }
         }
-        TxSummary(sendErg, receiveErg, sendTokens.map { it.key to it.value },
-            recvTokens.map { it.key to it.value }, minerFee, externalAddrs)
+
+        // Sum up what the wallet is RECEIVING (outputs to wallet)
+        var outputErgToWallet = 0L
+        val outputTokensToWallet = mutableMapOf<String, Long>()
+        var minerFee = 0.0
+        val externalAddrs = mutableListOf<String>()
+
+        for (output in details.outputs) {
+            val isMinerFee = output.valueNano in 1_000_000L..2_000_000L && output.tokens.isEmpty()
+            when {
+                isMinerFee -> minerFee += output.valueNano / 1_000_000_000.0
+                output.address == walletAddress -> {
+                    outputErgToWallet += output.valueNano
+                    for (tok in output.tokens) {
+                        outputTokensToWallet[tok.tokenId] = (outputTokensToWallet[tok.tokenId] ?: 0L) + tok.amount
+                    }
+                }
+                else -> {
+                    if (output.address !in externalAddrs) externalAddrs.add(output.address)
+                }
+            }
+        }
+
+        // Net change = outputs_to_wallet - inputs_from_wallet
+        // Positive = receiving, Negative = sending
+        val netErg = (outputErgToWallet - inputErgFromWallet) / 1_000_000_000.0
+
+        val allTokenIds = (inputTokensFromWallet.keys + outputTokensToWallet.keys).toSet()
+        val netTokens = mutableMapOf<String, Long>()
+        for (tokenId in allTokenIds) {
+            val net = (outputTokensToWallet[tokenId] ?: 0L) - (inputTokensFromWallet[tokenId] ?: 0L)
+            if (net != 0L) {
+                val name = viewModel.getTokenName(tokenId).ifEmpty { "${tokenId.take(8)}..." }
+                netTokens[name] = net
+            }
+        }
+
+        TxSummary(
+            netErg = netErg,
+            netTokens = netTokens,
+            minerFee = minerFee,
+            externalAddresses = externalAddrs,
+            inputsResolved = inputsResolved
+        )
     }
 
     /** Fetch and process the ErgoPay URL */
     suspend fun fetchAndProcess(address: String) {
+        if (isAddressRequest && address.isEmpty()) {
+            errorMessage = "Please select a wallet first"
+            screenMode = ScreenMode.ERROR
+            return
+        }
         try {
             val receiver = ErgoPayReceiver()
             val result = withContext(Dispatchers.IO) {
@@ -187,7 +226,7 @@ fun ErgoPayReviewScreen(
                     }
                     val parsed = com.google.gson.Gson().fromJson(detailsJson, Map::class.java)
                     @Suppress("UNCHECKED_CAST")
-                    val inputsList = (parsed["inputs"] as? List<String>) ?: emptyList()
+                    val inputBoxIds = (parsed["inputs"] as? List<String>) ?: emptyList()
                     @Suppress("UNCHECKED_CAST")
                     val outputsList = (parsed["outputs"] as? List<Map<String, Any>>) ?: emptyList()
                     val outputs = outputsList.map { out ->
@@ -202,7 +241,67 @@ fun ErgoPayReviewScreen(
                         } ?: emptyList()
                         ErgoPayOutput(address = addr, valueNano = value, tokens = tokens)
                     }
-                    txDetails = ErgoPayTxDetails(inputs = inputsList, outputs = outputs)
+
+                    // Fetch input boxes from the node to get their values/tokens/addresses
+                    val resolvedInputs = mutableListOf<ErgoPayOutput>()
+                    for (boxId in inputBoxIds) {
+                        try {
+                            val boxData = withContext(Dispatchers.IO) {
+                                viewModel.fetchBoxById(boxId)
+                            }
+                            if (boxData != null) {
+                                val addr = boxData["address"] as? String ?: "unknown"
+                                val value = (boxData["value"] as? Number)?.toLong() ?: 0L
+                                @Suppress("UNCHECKED_CAST")
+                                val assets = (boxData["assets"] as? List<Map<String, Any>>) ?: emptyList()
+                                val tokens = assets.map { asset ->
+                                    ErgoPayToken(
+                                        tokenId = asset["tokenId"] as? String ?: "",
+                                        amount = (asset["amount"] as? Number)?.toLong() ?: 0L
+                                    )
+                                }
+                                resolvedInputs.add(ErgoPayOutput(address = addr, valueNano = value, tokens = tokens))
+                            }
+                        } catch (e: Exception) {
+                            Log.w("ErgoPayReview", "Failed to fetch input box $boxId: ${e.message}")
+                        }
+                    }
+
+                    txDetails = ErgoPayTxDetails(
+                        inputBoxIds = inputBoxIds,
+                        inputs = resolvedInputs,
+                        outputs = outputs
+                    )
+
+                    // Auto-detect correct wallet from dApp-specified addresses or TX input/output addresses
+                    val allWallets = viewModel.getSignableWalletNames()
+                    var matched = false
+
+                    // Priority 1: dApp specified which address to use (EIP-0020 address/addresses field)
+                    if (result.addresses.isNotEmpty()) {
+                        for (name in allWallets) {
+                            val addr = viewModel.getWalletAddress(name)
+                            if (addr.isNotEmpty() && addr in result.addresses) {
+                                Log.d("ErgoPayReview", "Auto-switching to '$name' (dApp-specified address)")
+                                selectedWalletName = name
+                                matched = true
+                                break
+                            }
+                        }
+                    }
+
+                    // Priority 2: match input addresses (the wallet being spent from)
+                    if (!matched) {
+                        val inputAddresses = resolvedInputs.map { it.address }.toSet()
+                        for (name in allWallets) {
+                            val addr = viewModel.getWalletAddress(name)
+                            if (addr.isNotEmpty() && addr in inputAddresses && addr != walletAddress) {
+                                Log.d("ErgoPayReview", "Auto-switching to '$name' (matches TX input)")
+                                selectedWalletName = name
+                                break
+                            }
+                        }
+                    }
                 } catch (e: Exception) {
                     Log.e("ErgoPayReview", "Failed to parse TX details", e)
                     parseError = "Could not parse transaction details: ${e.message}"
@@ -219,8 +318,7 @@ fun ErgoPayReviewScreen(
     // On launch: if NOT an address request, fetch immediately. Otherwise show wallet picker.
     LaunchedEffect(ergoPayUrl) {
         if (ergoPayUrl.isEmpty()) {
-            errorMessage = "No ErgoPay URL provided"
-            screenMode = ScreenMode.ERROR
+            // URL not yet set (race with ViewModel state) — stay on LOADING
             return@LaunchedEffect
         }
         if (isAddressRequest) {
@@ -606,23 +704,59 @@ fun ErgoPayReviewScreen(
                         Spacer(modifier = Modifier.height(12.dp))
                     }
 
-                    // ═══ SUMMARY ═══
+                    // ═══ NET CHANGE SUMMARY ═══
                     if (summary != null) {
-                        Text("WHAT YOU PAY:", color = ColorTextDim, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        val totalPayErg = summary.sendingErg + summary.minerFee
-                        if (totalPayErg > 0) {
-                            Text("${String.format("%.6f", totalPayErg)} ERG", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                            if (summary.minerFee > 0) {
-                                Text("(incl. miner fee: ${String.format("%.5f", summary.minerFee)} ERG)", color = ColorTextDim, fontSize = 11.sp)
+                        if (!summary.inputsResolved) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF442200)),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("⚠ Could not fetch input boxes — showing output-only view",
+                                    color = ColorOrange, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
                             }
+                            Spacer(modifier = Modifier.height(8.dp))
                         }
-                        summary.sendingTokens.forEach { (name, amount) ->
-                            Text("+ $amount $name", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        }
-                        if (totalPayErg <= 0 && summary.sendingTokens.isEmpty()) {
+
+                        // Separate sending (negative net) and receiving (positive net)
+                        val sendingTokens = summary.netTokens.filter { it.value < 0 }
+                        val receivingTokens = summary.netTokens.filter { it.value > 0 }
+                        val isSendingErg = summary.netErg < -0.000001
+                        val isReceivingErg = summary.netErg > 0.000001
+
+                        // ─── WHAT YOU SEND ───
+                        Text("WHAT YOU SEND:", color = ColorTextDim, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        if (isSendingErg || sendingTokens.isNotEmpty() || summary.minerFee > 0) {
+                            // Show tokens being sent
+                            sendingTokens.forEach { (name, amount) ->
+                                Text("${kotlin.math.abs(amount)} $name", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                            }
+                            // Show ERG being sent (absolute value) 
+                            if (isSendingErg) {
+                                val absErg = kotlin.math.abs(summary.netErg)
+                                if (sendingTokens.isNotEmpty()) {
+                                    // ERG shown smaller when tokens are the main item
+                                    Text("+ ${String.format("%.6f", absErg)} ERG", color = Color.White, fontSize = 14.sp)
+                                } else {
+                                    Text("${String.format("%.6f", absErg)} ERG", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                                }
+                                if (summary.minerFee > 0) {
+                                    Text("(incl. miner fee: ${String.format("%.5f", summary.minerFee)} ERG)", color = ColorTextDim, fontSize = 11.sp)
+                                }
+                            } else if (summary.minerFee > 0 && sendingTokens.isEmpty()) {
+                                // Only the miner fee is being sent — show it as the main item
+                                Text("${String.format("%.5f", summary.minerFee)} ERG (miner fee)", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                            } else if (summary.minerFee > 0) {
+                                // Sending tokens but no extra ERG — just show miner fee note
+                                Text("+ ${String.format("%.5f", summary.minerFee)} ERG (miner fee)", color = Color.White, fontSize = 14.sp)
+                            }
+                        } else {
                             Text("Nothing", color = ColorTextDim, fontSize = 16.sp)
                         }
+
+                        // Show destination addresses
                         if (summary.externalAddresses.isNotEmpty()) {
                             Spacer(modifier = Modifier.height(8.dp))
                             Text("TO:", color = ColorTextDim, fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -635,18 +769,23 @@ fun ErgoPayReviewScreen(
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
+
+                        // ─── WHAT YOU RECEIVE ───
                         Text("WHAT YOU RECEIVE:", color = ColorTextDim, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(4.dp))
-                        if (summary.receivingTokens.isNotEmpty()) {
-                            summary.receivingTokens.forEach { (name, amount) ->
+
+                        if (isReceivingErg || receivingTokens.isNotEmpty()) {
+                            receivingTokens.forEach { (name, amount) ->
                                 Text("$amount $name", color = ColorAccent, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                             }
-                        }
-                        if (summary.receivingErg > 0) {
-                            Text("${String.format("%.6f", summary.receivingErg)} ERG (change)", color = if (summary.receivingTokens.isEmpty()) ColorAccent else ColorTextDim,
-                                fontSize = if (summary.receivingTokens.isEmpty()) 22.sp else 13.sp, fontWeight = FontWeight.Bold)
-                        }
-                        if (summary.receivingErg <= 0 && summary.receivingTokens.isEmpty()) {
+                            if (isReceivingErg) {
+                                val label = if (receivingTokens.isEmpty()) "" else " (change)"
+                                Text("${String.format("%.6f", summary.netErg)} ERG$label",
+                                    color = ColorAccent,
+                                    fontSize = if (receivingTokens.isEmpty()) 22.sp else 13.sp,
+                                    fontWeight = FontWeight.Bold)
+                            }
+                        } else {
                             Text("Nothing", color = ColorTextDim, fontSize = 16.sp)
                         }
                         Spacer(modifier = Modifier.height(16.dp))
@@ -669,37 +808,63 @@ fun ErgoPayReviewScreen(
                         Switch(checked = showFullDetails, onCheckedChange = { showFullDetails = it })
                     }
                     if (showFullDetails && txDetails != null) {
-                        txDetails!!.outputs.forEachIndexed { idx, output ->
-                            Card(
+                        val inputs = txDetails!!.inputs.map { inp ->
+                            TxDetailBox(address = inp.address, valueNano = inp.valueNano,
+                                tokens = inp.tokens.map { TxDetailToken(it.tokenId, it.amount) })
+                        }
+                        val outputs = txDetails!!.outputs.map { out ->
+                            TxDetailBox(address = out.address, valueNano = out.valueNano,
+                                tokens = out.tokens.map { TxDetailToken(it.tokenId, it.amount) })
+                        }
+                        TransactionDetailsView(
+                            inputs = inputs,
+                            outputs = outputs,
+                            walletAddresses = setOf(walletAddress),
+                            viewModel = viewModel,
+                            unresolvedInputIds = if (txDetails!!.inputs.isEmpty()) txDetails!!.inputBoxIds else emptyList()
+                        )
+                    }
+
+                    // Raw data toggle (advanced)
+                    if (ergoPayResult?.reducedTxBase64 != null) {
+                        var showRawData by remember { mutableStateOf(false) }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Raw Data (Advanced)", color = ColorText, fontSize = 14.sp)
+                            Switch(checked = showRawData, onCheckedChange = { showRawData = it })
+                        }
+                        if (showRawData) {
+                            Row(
                                 modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                                colors = CardDefaults.cardColors(containerColor = ColorInputBg),
-                                shape = RoundedCornerShape(10.dp)
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Column(modifier = Modifier.padding(12.dp)) {
-                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text("Output ${idx + 1}", color = ColorTextDim, fontSize = 10.sp)
-                                        when {
-                                            output.valueNano in 1_000_000L..2_000_000L && output.tokens.isEmpty() ->
-                                                Text("MINER FEE", color = ColorOrange, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                                            output.address == walletAddress ->
-                                                Text("YOUR WALLET", color = ColorAccent, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                                            else -> Text("EXTERNAL", color = ColorBlue, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                                        }
-                                    }
-                                    Spacer(Modifier.height(4.dp))
-                                    Text("To:", color = ColorTextDim, fontSize = 10.sp)
-                                    SelectionContainer {
-                                        Text(output.address, color = if (output.address == walletAddress) ColorAccent else Color.White,
-                                            fontSize = 10.sp, fontFamily = FontFamily.Monospace, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    }
-                                    Spacer(Modifier.height(4.dp))
-                                    Text("Σ ${String.format("%.6f", output.valueNano / 1_000_000_000.0)} ERG",
-                                        color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                    output.tokens.forEach { tok ->
-                                        val name = viewModel.getTokenName(tok.tokenId).ifEmpty { "${tok.tokenId.take(8)}..." }
-                                        Text("+ ${tok.amount} $name", color = ColorAccent, fontSize = 11.sp)
-                                    }
+                                Button(
+                                    onClick = {
+                                        clipboardManager.setText(AnnotatedString(ergoPayResult!!.reducedTxBase64!!))
+                                        Toast.makeText(context, "Reduced TX copied", Toast.LENGTH_SHORT).show()
+                                    },
+                                    modifier = Modifier.weight(1f).height(36.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = ColorSelectionBg),
+                                    contentPadding = PaddingValues(horizontal = 8.dp)
+                                ) {
+                                    Text("📋 Copy Reduced TX", color = Color.White, fontSize = 11.sp)
                                 }
+                            }
+                            SelectionContainer {
+                                Text(
+                                    text = ergoPayResult!!.reducedTxBase64!!,
+                                    color = Color(0xFFAAAAAA),
+                                    fontSize = 9.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(ColorInputBg, RoundedCornerShape(8.dp))
+                                        .padding(10.dp)
+                                )
                             }
                         }
                     }

@@ -162,11 +162,26 @@ fun ReviewTxScreen(
 
             if (showSummary) {
                 item {
-                    TransactionAddressBreakdown(
-                        txData = uiState.preparedTxData,
-                        viewModel = viewModel,
+                    val (inputs, outputs) = remember(uiState.preparedTxData) {
+                        parsePreparedTxData(uiState.preparedTxData)
+                    }
+                    val walletAddrs = remember(uiState.walletAddresses, uiState.selectedAddress, uiState.changeAddress) {
+                        val addrs = mutableSetOf<String>()
+                        addrs.addAll(uiState.walletAddresses)
+                        if (uiState.selectedAddress.isNotEmpty()) addrs.add(uiState.selectedAddress)
+                        if (uiState.changeAddress.isNotEmpty()) addrs.add(uiState.changeAddress)
+                        addrs
+                    }
+                    val contractAddresses = remember { com.piggytrade.piggytrade.protocol.NetworkConfig.KNOWN_PROTOCOLS }
+                    val appFeeAddress = remember { viewModel.getNodeAuthLink() }
 
-                        serviceFee = params.serviceFee
+                    TransactionDetailsView(
+                        inputs = inputs,
+                        outputs = outputs,
+                        walletAddresses = walletAddrs,
+                        viewModel = viewModel,
+                        contractAddresses = contractAddresses,
+                        appFeeAddress = appFeeAddress
                     )
                     Spacer(Modifier.height(10.dp))
                 }
