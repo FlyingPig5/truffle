@@ -14,6 +14,12 @@ class SendTxBuilder(
     companion object {
         /** Minimum nanoERG per output box (dust threshold) */
         const val MIN_BOX_VALUE = 1_000_000L
+
+        /** nanoERG allocated to each extra box when splitting >100 tokens */
+        const val SPLIT_BOX_VALUE = 5_000_000L
+
+        /** Maximum number of distinct token types per Ergo box */
+        const val MAX_TOKENS_PER_BOX = 100
     }
 
     data class SendRecipient(
@@ -109,21 +115,41 @@ class SendTxBuilder(
         // Build output requests
         val requests = mutableListOf<MutableMap<String, Any>>()
 
-        // Recipient outputs
+        // Recipient outputs — split into multiple boxes if > MAX_TOKENS_PER_BOX tokens
         for (r in recipients) {
-            val assets = r.tokens.map { t ->
-                mapOf("tokenId" to t.tokenId, "amount" to t.amount)
+            if (r.tokens.size <= MAX_TOKENS_PER_BOX) {
+                val assets = r.tokens.map { t ->
+                    mapOf("tokenId" to t.tokenId, "amount" to t.amount)
+                }
+                requests.add(mutableMapOf(
+                    "address" to r.address,
+                    "value" to r.nanoErg,
+                    "assets" to assets,
+                    "registers" to emptyMap<String, String>(),
+                    "creationHeight" to currentHeight
+                ))
+            } else {
+                // Split token list across multiple boxes; first box gets the ERG
+                val chunks = r.tokens.chunked(MAX_TOKENS_PER_BOX)
+                chunks.forEachIndexed { idx, chunk ->
+                    val ergForBox = if (idx == 0) r.nanoErg else SPLIT_BOX_VALUE
+                    // Extra boxes must be funded — charge against the sender's change
+                    if (idx > 0) totalErgRequired += SPLIT_BOX_VALUE
+                    val assets = chunk.map { t ->
+                        mapOf("tokenId" to t.tokenId, "amount" to t.amount)
+                    }
+                    requests.add(mutableMapOf(
+                        "address" to r.address,
+                        "value" to ergForBox,
+                        "assets" to assets,
+                        "registers" to emptyMap<String, String>(),
+                        "creationHeight" to currentHeight
+                    ))
+                }
             }
-            requests.add(mutableMapOf(
-                "address" to r.address,
-                "value" to r.nanoErg,
-                "assets" to assets,
-                "registers" to emptyMap<String, String>(),
-                "creationHeight" to currentHeight
-            ))
         }
 
-        // Change output
+        // Change output — split into multiple boxes if > MAX_TOKENS_PER_BOX tokens
         val changeErg = selectedErg - totalErgRequired
         val changeTokens = mutableMapOf<String, Long>()
         for ((tid, amt) in selectedTokens) {
@@ -134,19 +160,14 @@ class SendTxBuilder(
             }
         }
 
-        // Only add change output if there's ERG or tokens remaining
         if (changeErg >= MIN_BOX_VALUE || changeTokens.isNotEmpty()) {
-            val changeValue = if (changeErg >= MIN_BOX_VALUE) changeErg else MIN_BOX_VALUE
-            val changeAssets = changeTokens.map { (tid, amt) ->
-                mapOf("tokenId" to tid, "amount" to amt)
-            }
-            requests.add(mutableMapOf(
-                "address" to changeAddress,
-                "value" to changeValue,
-                "assets" to changeAssets,
-                "registers" to emptyMap<String, String>(),
-                "creationHeight" to currentHeight
-            ))
+            val changeBoxes = splitTokensIntoBoxes(
+                tokens = changeTokens,
+                totalErg = if (changeErg >= MIN_BOX_VALUE) changeErg else MIN_BOX_VALUE,
+                address = changeAddress,
+                currentHeight = currentHeight
+            )
+            requests.addAll(changeBoxes)
         }
 
         // Fetch box bytes for signing
@@ -164,6 +185,50 @@ class SendTxBuilder(
             "context_extensions" to emptyMap<String, Any>(),
             "inputIds" to inputIds
         )
+    }
+
+    /**
+     * Splits a token map into one or more output boxes, each carrying at most
+     * MAX_TOKENS_PER_BOX distinct token types. The first box receives as much ERG
+     * as possible; each additional box receives exactly MIN_BOX_VALUE nanoERG
+     * (deducted from the first box's ERG, so the caller must ensure sufficient ERG).
+     */
+    private fun splitTokensIntoBoxes(
+        tokens: Map<String, Long>,
+        totalErg: Long,
+        address: String,
+        currentHeight: Int
+    ): List<MutableMap<String, Any>> {
+        if (tokens.isEmpty()) {
+            // No tokens — single box with all the ERG
+            return listOf(mutableMapOf(
+                "address" to address,
+                "value" to totalErg,
+                "assets" to emptyList<Map<String, Any>>(),
+                "registers" to emptyMap<String, String>(),
+                "creationHeight" to currentHeight
+            ))
+        }
+
+        val chunks = tokens.entries.chunked(MAX_TOKENS_PER_BOX)
+        val extraBoxCount = chunks.size - 1          // boxes 1..N each need SPLIT_BOX_VALUE ERG
+        val extra = extraBoxCount * SPLIT_BOX_VALUE
+        var firstBoxErg = totalErg - extra
+        if (firstBoxErg < MIN_BOX_VALUE) firstBoxErg = MIN_BOX_VALUE   // safety floor
+
+        return chunks.mapIndexed { idx, chunk ->
+            val ergForBox = if (idx == 0) firstBoxErg else SPLIT_BOX_VALUE
+            val assets = chunk.map { (tid, amt) ->
+                mapOf("tokenId" to tid, "amount" to amt)
+            }
+            mutableMapOf(
+                "address" to address,
+                "value" to ergForBox,
+                "assets" to assets,
+                "registers" to emptyMap<String, String>(),
+                "creationHeight" to currentHeight
+            )
+        }
     }
 
     /**

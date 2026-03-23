@@ -156,4 +156,20 @@ class PreferenceManager(context: Context) {
             Pair(emptySet(), "")
         }
     }
+
+    // ─── SAVED EXPLORER ADDRESSES ────────────────────────────────────────
+
+    fun saveExplorerAddresses(addresses: Map<String, String>) {
+        prefs.edit().putString("explorer_addresses", gson.toJson(addresses)).apply()
+    }
+
+    fun loadExplorerAddresses(): Map<String, String> {
+        val json = prefs.getString("explorer_addresses", null) ?: return emptyMap()
+        return try {
+            val type = object : TypeToken<Map<String, String>>() {}.type
+            gson.fromJson(json, type)
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
 }

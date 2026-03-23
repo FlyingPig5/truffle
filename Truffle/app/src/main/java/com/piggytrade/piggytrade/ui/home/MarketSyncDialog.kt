@@ -1,7 +1,7 @@
 package com.piggytrade.piggytrade.ui.home
 
 import com.piggytrade.piggytrade.ui.theme.*
-import com.piggytrade.piggytrade.ui.swap.SwapViewModel
+import com.piggytrade.piggytrade.ui.market.MarketViewModel
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -29,7 +29,7 @@ import androidx.compose.ui.window.DialogProperties
  */
 @Composable
 fun MarketSyncDialog(
-    viewModel: SwapViewModel,
+    viewModel: MarketViewModel,
     isFirstSync: Boolean,
     onDismiss: () -> Unit
 ) {
@@ -332,7 +332,7 @@ fun MarketSyncDialog(
  */
 @Composable
 fun MarketSyncButton(
-    viewModel: SwapViewModel,
+    viewModel: MarketViewModel,
     onClick: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()

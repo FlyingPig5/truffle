@@ -7,6 +7,17 @@ class TxBuilder(
     private val client: NodeClient,
     private val myAddress: String
 ) {
+    companion object {
+        /** Minimum nanoERG per output box (dust threshold) */
+        const val MIN_BOX_VALUE = 1_000_000L
+
+        /** nanoERG allocated to each extra box when splitting >100 tokens */
+        const val SPLIT_BOX_VALUE = 5_000_000L
+
+        /** Maximum number of distinct token types per Ergo box */
+        const val MAX_TOKENS_PER_BOX = 100
+    }
+
     private fun parseBigInt(a: Any?): java.math.BigInteger {
         return when (a) {
             is Number -> java.math.BigInteger.valueOf(a.toLong())
@@ -75,9 +86,6 @@ class TxBuilder(
             userChangeAssetsDict[tid] = newBal
         }
 
-        val userChangeAssets = userChangeAssetsDict.filterValues { it > BigInteger.ZERO }
-            .map { mapOf("tokenId" to it.key, "amount" to it.value.toLong()) }
-
         val requests = mutableListOf<MutableMap<String, Any>>()
         requests.add(mutableMapOf(
             "address" to poolAddress,
@@ -108,13 +116,16 @@ class TxBuilder(
 
         client.verifyProtocolV1(requests, nodeParity)
 
-        requests.add(mutableMapOf(
-            "address" to (changeAddress ?: myAddress),
-            "value" to userChangeErg.toLong(),
-            "assets" to userChangeAssets,
-            "registers" to emptyMap<String, String>(),
-            "creationHeight" to currentHeight
-        ))
+        // Change output — split into multiple boxes if > MAX_TOKENS_PER_BOX tokens
+        val userChangeAssetList = userChangeAssetsDict.filterValues { it > BigInteger.ZERO }
+            .map { (tid, amt) -> tid to amt.toLong() }
+        val changeBoxes = splitChangeTokens(
+            assets = userChangeAssetList,
+            totalErg = userChangeErg.toLong(),
+            address = changeAddress ?: myAddress,
+            currentHeight = currentHeight
+        )
+        requests.addAll(changeBoxes)
 
         return mapOf(
             "requests" to requests,
@@ -124,5 +135,47 @@ class TxBuilder(
             "dataInputsRaw" to emptyList<String>(),
             "current_height" to currentHeight
         )
+    }
+
+    /**
+     * Splits an asset list into one or more change boxes, each carrying at most
+     * [MAX_TOKENS_PER_BOX] distinct token types. Extra boxes receive [MIN_BOX_VALUE]
+     * nanoERG each, deducted from the first box.
+     */
+    private fun splitChangeTokens(
+        assets: List<Pair<String, Long>>,
+        totalErg: Long,
+        address: String,
+        currentHeight: Int
+    ): List<MutableMap<String, Any>> {
+        if (assets.isEmpty()) {
+            return listOf(mutableMapOf(
+                "address" to address,
+                "value" to totalErg,
+                "assets" to emptyList<Map<String, Any>>(),
+                "registers" to emptyMap<String, String>(),
+                "creationHeight" to currentHeight
+            ))
+        }
+
+        val chunks = assets.chunked(MAX_TOKENS_PER_BOX)
+        val extraBoxCount = chunks.size - 1
+        val extra = extraBoxCount * SPLIT_BOX_VALUE
+        var firstBoxErg = totalErg - extra
+        if (firstBoxErg < MIN_BOX_VALUE) firstBoxErg = MIN_BOX_VALUE   // safety floor
+
+        return chunks.mapIndexed { idx, chunk ->
+            val ergForBox = if (idx == 0) firstBoxErg else SPLIT_BOX_VALUE
+            val assetList = chunk.map { (tid, amt) ->
+                mapOf("tokenId" to tid, "amount" to amt)
+            }
+            mutableMapOf(
+                "address" to address,
+                "value" to ergForBox,
+                "assets" to assetList,
+                "registers" to emptyMap<String, String>(),
+                "creationHeight" to currentHeight
+            )
+        }
     }
 }

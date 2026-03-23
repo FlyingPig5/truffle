@@ -95,36 +95,6 @@ data class SwapState(
     val walletFunctionalityEnabled: Boolean = false,
     val activeTab: String = "dex", // "dex", "wallet", "bank", "portfolio", "ecosystem"
 
-    // ─── PORTFOLIO STATE ─────────────────────────────────────────────────
-    val ergPriceUsd: Double? = null,
-    val ergPriceHistory: List<Pair<Long, Double>> = emptyList(),
-    val sigUsdOracleHistory: List<Pair<Long, Double>> = emptyList(),
-    val sigUsdDexHistory: List<Pair<Long, Double>> = emptyList(),
-    val chartRange: String = "7D",
-    val selectedChartToken: String? = null, // token name for DEX price chart, null = ERG/USD oracle
-    val tokenPriceHistory: List<Pair<Long, Double>> = emptyList(), // ERG price of selected token
-    val tokenUsdValues: Map<String, Double> = emptyMap(), // tokenId -> USD value of selling all on DEX
-    val poolTrades: List<PoolTrade> = emptyList(),          // recent trades for selected token pair
-    val isLoadingPoolTrades: Boolean = false,
-    val poolVolume24h: Double = 0.0,                         // ERG volume traded in last 24h
-    val poolVolume7d: Double = 0.0,                          // ERG volume traded in last 7 days
-    val tokenMarketData: List<com.piggytrade.piggytrade.data.OraclePriceStore.TokenMarketData> = emptyList(),
-
-    // ─── MARKET SYNC STATE ───────────────────────────────────────────────
-    val marketSyncState: String = "idle",   // "idle", "syncing", "completed"
-    val marketSyncProgress: Float = 0f,     // 0..1
-    val marketSyncLabel: String = "",       // current token being synced
-    val marketSyncIndex: Int = 0,           // tokens completed
-    val marketSyncTotal: Int = 0,           // total tokens
-    val lastMarketSyncMs: Long = 0L,        // timestamp of last completed sync
-    val marketSyncIncomplete: Boolean = false, // true if sync was stopped before completion
-    val syncFailedCount: Int = 0,           // tokens that timed out in last sync
-
-    // ─── ECOSYSTEM STATE ─────────────────────────────────────────────────
-    val ecosystemTvl: Map<String, Double> = emptyMap(),       // protocol name -> ERG TVL
-    val ecosystemActivity: List<EcosystemTx> = emptyList(),   // sorted by timestamp desc
-    val isLoadingEcosystem: Boolean = false,
-    val ecosystemLastFetched: Long = 0L,                      // cache timestamp
 
     // ─── MULTI-ADDRESS STATE ─────────────────────────────────────────────────
     val walletAddresses: List<String> = emptyList(),         // All derived addresses for current wallet
@@ -155,7 +125,17 @@ data class SwapState(
     val sendReviewParams: SendReviewParams? = null,
     val sendPreparedTxData: Map<String, Any>? = null,
     val sendCachedHeadersJson: String = "",
-    val ergoPayIncomingUrl: String = ""
+    val ergoPayIncomingUrl: String = "",
+
+    // ─── ADDRESS EXPLORER STATE ──────────────────────────────────────────
+    val explorerAddress: String = "",
+    val explorerErgBalance: Double = 0.0,
+    val explorerTokens: Map<String, Long> = emptyMap(),
+    val explorerTrades: List<NetworkTransaction> = emptyList(),
+    val explorerHistoryOffset: Int = 0,
+    val isLoadingExplorer: Boolean = false,
+    val isLoadingExplorerHistory: Boolean = false,
+    val savedExplorerAddresses: Map<String, String> = emptyMap() // address -> label
 )
 
 data class PoolMapping(
@@ -215,7 +195,8 @@ data class PoolTrade(
     val tokenAmount: Double,     // Token side (absolute, human-readable with decimals)
     val timestamp: Long,         // Unix ms (from tx), 0 if unknown
     val txId: String,            // Transaction ID for explorer link
-    val traderAddress: String = "" // Abbreviated trader address
+    val traderAddress: String = "", // Abbreviated trader address
+    val priceImpact: Double? = null  // % price impact; null when not computable
 )
 
 
@@ -271,16 +252,18 @@ data class SendReviewParams(
 class SwapViewModel(application: Application) : AndroidViewModel(application) {
 
     private val TAG = "SwapViewModel"
-    private val preferenceManager = PreferenceManager(application)
-    private val tokenRepository = TokenRepository(application)
-    val oraclePriceStore = com.piggytrade.piggytrade.data.OraclePriceStore(application)
+    private val session = (application as com.piggytrade.piggytrade.TruffleApplication).sessionManager
+    private val preferenceManager = session.preferenceManager
+    private val tokenRepository = session.tokenRepository
+    private val nodeManager = session.nodeManager
+    val oraclePriceStore = session.oraclePriceStore
     private var quoteJob: kotlinx.coroutines.Job? = null
 
     private val _uiState: MutableStateFlow<SwapState> by lazy {
         if (BuildConfig.DEBUG) Log.d(TAG, "Initializing MutableStateFlow...")
-        val savedNodes = preferenceManager.loadNodes()
-        val nodesMap = if (savedNodes.isEmpty()) com.piggytrade.piggytrade.protocol.NetworkConfig.NODES else savedNodes
-        val nodesList = nodesMap.map { "${it.key}: ${(it.value as Map<String, Any>)["url"]}" }
+        // Node list is owned by NodeManager — read from there to avoid duplication
+        val nodesList = nodeManager.nodes.value
+        val initialNodeIndex = nodeManager.selectedNodeIndex.value
         
         val savedWallets = preferenceManager.loadWallets()
         val displayWallets = mutableListOf<String>()
@@ -305,9 +288,6 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             baseFavs
         }
-
-        val initialNodeUrl = preferenceManager.selectedNode
-        val initialNodeIndex = nodesList.indexOfFirst { it.endsWith(initialNodeUrl) }.coerceAtLeast(0)
 
         val initialWalletDisplay = preferenceManager.selectedWallet.let { 
             if (it.isEmpty() || it == "Select Wallet") {
@@ -345,7 +325,8 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 numFavorites = numFavs,
                 showFavorites = (preferenceManager.loadSettings()["show_favorites"] as? Boolean) ?: false,
                 allowHttpNodes = (preferenceManager.loadSettings()["allow_http_nodes"] as? Boolean) ?: false,
-                walletFunctionalityEnabled = (preferenceManager.loadSettings()["wallet_functionality"] as? Boolean) ?: false
+                walletFunctionalityEnabled = (preferenceManager.loadSettings()["wallet_functionality"] as? Boolean) ?: false,
+                savedExplorerAddresses = preferenceManager.loadExplorerAddresses()
             )
         )
     }
@@ -355,28 +336,26 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         if (BuildConfig.DEBUG) Log.d(TAG, "SwapViewModel instance created.")
         
         // 1. Initial immediate list setup (no network)
-        loadPoolMappings(fetchLiquidity = false) 
-        
+        loadPoolMappings(fetchLiquidity = false)
+
         // 2. Offload heavy background tasks
         viewModelScope.launch {
             // Sequential initialization
             withContext(kotlinx.coroutines.Dispatchers.Default) {
                 tokenRepository.tradeMapper
             }
-            
+
             // 1. Initialize Node Client (wait for it)
             initializeNodeClient()
-            
+
             // 2. Fetch Wallet Balances (now client is ready)
             fetchWalletBalances()
-            
+
             // 3. First launch sync if needed
             if (!tokenRepository.hasTokenFiles()) {
                 syncTokenList(isFirstLaunch = true)
             }
-
-            // 4. Sync oracle prices at startup (runs on IO, survives screen changes)
-            syncOraclePrices()
+            // Note: syncOraclePrices() is now called on MarketViewModel from MainActivity
         }
     }
 
@@ -402,9 +381,14 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private var nodeClient: NodeClient? = null
+    private var nodeClient: NodeClient?
+        get() = nodeManager.nodeClient.value
+        private set(value) { nodeManager.setNodeClientDirect(value) }
     /** Pool of public nodes for distributing read-only queries */
-    private val nodePool = NodePool()
+    private val nodePool = session.nodePool
+
+    /** Cached raw pool box data from liquidity fetch — maps pid -> box map */
+    private val poolBoxDataCache = mutableMapOf<String, Map<String, Any>>()
 
 
     /** Track oracle sync job to prevent duplicate launches */
@@ -423,43 +407,16 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
     // ─── INIT & NODE MANAGEMENT ──────────────────────────────────────────────
 
     private suspend fun initializeNodeClient() {
-        withContext(kotlinx.coroutines.Dispatchers.IO) {
-            try {
-                val currentNodes = _uiState.value.nodes
-                val index = _uiState.value.selectedNodeIndex
-                if (index in currentNodes.indices) {
-                    var nUrl = currentNodes[index]
-                    if (nUrl.contains("(")) {
-                        nUrl = nUrl.substringAfter("(").substringBefore(")")
-                    } else if (nUrl.contains(": ")) {
-                        nUrl = nUrl.substringAfter(": ")
-                    }
-                    
-                    val allowHttp = _uiState.value.allowHttpNodes
-                    val finalUrl = if (nUrl.startsWith("https://")) {
-                        nUrl
-                    } else if (nUrl.startsWith("http://") && allowHttp) {
-                        nUrl
-                    } else if (nUrl.startsWith("http://")) {
-                        Log.w(TAG, "HTTP node blocked (setting disabled), falling back to default HTTPS node")
-                        "https://ergo-node.eutxo.de"
-                    } else {
-                        "https://ergo-node.eutxo.de"
-                    }
-                    if (BuildConfig.DEBUG) Log.d(TAG, "Using node URL: $finalUrl")
-                    val client = NodeClient(finalUrl)
-                    nodeClient = client
-                    trader = Trader(client, null, tokenRepository.tokens)
-                    
-                    withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        _uiState.value = _uiState.value.copy(nodeUrl = finalUrl)
-                        loadPoolMappings(fetchLiquidity = false) 
-                    }
-                }
-                Unit
-            } catch (e: Exception) {
-                Log.e(TAG, "Error initializing node client", e)
-            }
+        val allowHttp = _uiState.value.allowHttpNodes
+        nodeManager.initializeNodeClient(allowHttp) { client, finalUrl ->
+            // Runs on Main — update state and rebuild pool mappings
+            trader = Trader(client, null, tokenRepository.tokens)
+            _uiState.value = _uiState.value.copy(
+                nodeUrl = finalUrl,
+                nodes = nodeManager.nodes.value,
+                selectedNodeIndex = nodeManager.selectedNodeIndex.value
+            )
+            loadPoolMappings(fetchLiquidity = false)
         }
     }
 
@@ -589,7 +546,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSelectedAddress(addr: String) {
         _uiState.value = _uiState.value.copy(selectedAddress = addr)
-        fetchWalletBalances()
+        fetchWalletBalances(force = true)
         fetchTransactionHistory()
     }
 
@@ -625,36 +582,24 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
 
 
     fun setSelectedNodeIndex(index: Int) {
-        _uiState.value = _uiState.value.copy(selectedNodeIndex = index)
+        nodeManager.setSelectedNodeIndex(index)
+        _uiState.value = _uiState.value.copy(
+            selectedNodeIndex = index,
+            nodes = nodeManager.nodes.value
+        )
         updateNodeClient()
         fetchQuote()
     }
 
     fun deleteNode() {
-        val current = _uiState.value
-        val index = current.selectedNodeIndex
-        if (current.nodes.isEmpty()) return
-        
-        val nodesMap = preferenceManager.loadNodes().toMutableMap()
-        val nodeNameFull = current.nodes[index]
-        val nodeKeyToRemove = if (nodeNameFull.contains(": ")) nodeNameFull.substringBefore(":") else nodeNameFull
-        
-        if (nodesMap.containsKey(nodeKeyToRemove)) {
-            nodesMap.remove(nodeKeyToRemove)
-            preferenceManager.saveNodes(nodesMap)
-            
-            // Re-load nodes after deletion
-            val newNodesMap = if (nodesMap.isEmpty()) com.piggytrade.piggytrade.protocol.NetworkConfig.NODES else nodesMap
-            val newNodesList = newNodesMap.map { "${it.key}: ${(it.value as Map<String, Any>)["url"]}" }
-            
-            val newIndex = (index).coerceAtMost(newNodesList.size - 1).coerceAtLeast(0)
-            
-            _uiState.value = current.copy(
-                nodes = newNodesList,
-                selectedNodeIndex = newIndex
-            )
-            updateNodeClient()
-        }
+        if (_uiState.value.nodes.isEmpty()) return
+        // Delegate to NodeManager — it handles preference persistence and list rebuild
+        val newIndex = nodeManager.deleteSelectedNode()
+        _uiState.value = _uiState.value.copy(
+            nodes = nodeManager.nodes.value,
+            selectedNodeIndex = newIndex
+        )
+        updateNodeClient()
     }
 
     fun setSelectionContext(context: String) {
@@ -868,12 +813,12 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                     selectedAddresses = setOf(finalAddress),
                     changeAddress = finalAddress,
                     isScanningAddresses = false,
-                    tokenUsdValues = emptyMap() // Clear so prices recalculate for new wallet
+
                 )
                 preferenceManager.selectedWallet = name
                 
                 // Immediately fetch data for the new wallet
-                fetchWalletBalances()
+                fetchWalletBalances(force = true)
                 fetchTransactionHistory()
             }
         }
@@ -956,10 +901,10 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                     walletAddresses = allAddresses,
                     selectedAddresses = selectedAddrs,
                     changeAddress = changeAddr,
-                    tokenUsdValues = emptyMap() // Clear so prices recalculate for new wallet
+
                 )
                 preferenceManager.selectedWallet = internalKey
-                fetchWalletBalances()
+                fetchWalletBalances(force = true)
                 updateBalances()
                 fetchTransactionHistory()
             }
@@ -2678,12 +2623,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         }
         _uiState.value = _uiState.value.copy(isLoadingHistory = true)
 
-        // Pause market sync to free up node connections for tx history
-        val wasMarketSyncing = marketSyncJob?.isActive == true
-        if (wasMarketSyncing) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "Pausing market sync to prioritize tx history")
-            marketSyncJob?.cancel()
-        }
+        // Market sync is now managed by MarketViewModel — no pause needed
 
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
@@ -2786,15 +2726,166 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.value = _uiState.value.copy(isLoadingHistory = false)
                 }
             } finally {
-                // Resume market sync if it was running before we paused it
-                if (wasMarketSyncing) {
-                    if (BuildConfig.DEBUG) Log.d(TAG, "Resuming market sync after tx history")
-                    withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        startMarketSync()
+                // Market sync (if it was running) is now managed by MarketViewModel — no resume needed
+            }
+        }
+    }
+
+    // ─── ADDRESS EXPLORER ─────────────────────────────────────────────────
+
+    fun openAddressExplorer(address: String) {
+        _uiState.value = _uiState.value.copy(
+            explorerAddress = address,
+            explorerErgBalance = 0.0,
+            explorerTokens = emptyMap(),
+            explorerTrades = emptyList(),
+            explorerHistoryOffset = 0,
+            isLoadingExplorer = true,
+            isLoadingExplorerHistory = false
+        )
+        fetchExplorerBalances()
+        fetchExplorerTransactionHistory()
+    }
+
+    private fun fetchExplorerBalances() {
+        val address = _uiState.value.explorerAddress
+        if (address.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val client = nodeClient ?: return@launch
+                val (tokens, nanoerg, _) = client.getMyAssets(address, false)
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(
+                        explorerErgBalance = nanoerg.toDouble() / 1_000_000_000.0,
+                        explorerTokens = tokens,
+                        isLoadingExplorer = false
+                    )
+                }
+                // Fetch token info for any tokens with generic names
+                tokens.keys.forEach { tid ->
+                    if (tid != "ERG") {
+                        val currentName = tokenRepository.getTokenName(tid)
+                        val isGeneric = currentName.startsWith(tid.take(5)) || currentName == tid
+                        val hasNoDec = tokenRepository.getTokenDecimals(tid) == 0
+                        if (isGeneric || hasNoDec) {
+                            try {
+                                client.api.getTokenInfo(tid)?.let { info ->
+                                    tokenRepository.saveTokenInfo(tid, info)
+                                }
+                            } catch (_: Exception) {}
+                        }
                     }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(isLoadingExplorer = false)
                 }
             }
         }
+    }
+
+    fun fetchExplorerTransactionHistory(loadMore: Boolean = false) {
+        val address = _uiState.value.explorerAddress
+        if (address.isEmpty()) return
+        if (loadMore && _uiState.value.isLoadingExplorerHistory) return
+        if (!loadMore) {
+            _uiState.value = _uiState.value.copy(explorerTrades = emptyList(), explorerHistoryOffset = 0)
+        }
+        _uiState.value = _uiState.value.copy(isLoadingExplorerHistory = true)
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val client = nodeClient ?: return@launch
+                val currentOffset = if (loadMore) _uiState.value.explorerHistoryOffset else 0
+                val limit = 50
+                val addressSet = setOf(address)
+
+                // Build ergoTree map
+                val ergoTreeToAddr = mutableMapOf<String, String>()
+                val cached = ergoTreeCache[address]
+                if (cached != null) {
+                    ergoTreeToAddr[cached] = address
+                } else {
+                    try {
+                        val treeRes = client.api.addressToErgoTree(address)
+                        val tree = (treeRes["ergoTree"] as? String) ?: (treeRes["tree"] as? String) ?: ""
+                        if (tree.isNotEmpty()) {
+                            ergoTreeToAddr[tree] = address
+                            ergoTreeCache[address] = tree
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                val newTrades = mutableListOf<NetworkTransaction>()
+
+                // Unconfirmed (only on first page)
+                if (currentOffset == 0) {
+                    val ergoTree = ergoTreeToAddr.entries.firstOrNull()?.key ?: ""
+                    if (ergoTree.isNotEmpty()) {
+                        try {
+                            val reqBody = "\"$ergoTree\"".toRequestBody("application/json".toMediaTypeOrNull())
+                            val unconfList = client.api.getUnconfirmedTransactionsByErgoTree(
+                                offset = 0, limit = 50, ergoTree = reqBody
+                            )
+                            newTrades.addAll(parseNetworkTransactions(unconfList, addressSet, false, ergoTreeToAddr))
+                        } catch (_: Exception) {}
+                    }
+                }
+
+                // Confirmed
+                try {
+                    val reqBody = "\"$address\"".toRequestBody("application/json".toMediaTypeOrNull())
+                    val confResp = client.api.getTransactionsByAddress(
+                        offset = currentOffset, limit = limit, address = reqBody
+                    )
+                    @Suppress("UNCHECKED_CAST")
+                    val confList = confResp["items"] as? List<Map<String, Any>> ?: emptyList()
+                    newTrades.addAll(parseNetworkTransactions(confList, addressSet, true, ergoTreeToAddr))
+                } catch (_: Exception) {}
+
+                withContext(Dispatchers.Main) {
+                    val currentList = if (loadMore) _uiState.value.explorerTrades else emptyList()
+                    val finalTrades = (currentList + newTrades)
+                        .distinctBy { it.id }
+                        .sortedWith(compareBy<NetworkTransaction> { it.isConfirmed }.thenByDescending { it.timestamp })
+                    _uiState.value = _uiState.value.copy(
+                        explorerTrades = finalTrades,
+                        explorerHistoryOffset = currentOffset + limit,
+                        isLoadingExplorerHistory = false
+                    )
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(isLoadingExplorerHistory = false)
+                }
+            }
+        }
+    }
+
+    fun clearExplorerState() {
+        _uiState.value = _uiState.value.copy(
+            explorerAddress = "",
+            explorerErgBalance = 0.0,
+            explorerTokens = emptyMap(),
+            explorerTrades = emptyList(),
+            explorerHistoryOffset = 0,
+            isLoadingExplorer = false,
+            isLoadingExplorerHistory = false
+        )
+    }
+
+    fun saveExplorerAddress(address: String, label: String) {
+        val current = _uiState.value.savedExplorerAddresses.toMutableMap()
+        current[address] = label
+        _uiState.value = _uiState.value.copy(savedExplorerAddresses = current)
+        preferenceManager.saveExplorerAddresses(current)
+    }
+
+    fun removeExplorerAddress(address: String) {
+        val current = _uiState.value.savedExplorerAddresses.toMutableMap()
+        current.remove(address)
+        _uiState.value = _uiState.value.copy(savedExplorerAddresses = current)
+        preferenceManager.saveExplorerAddresses(current)
     }
 
     private fun parseNetworkTransactions(
@@ -3048,1236 +3139,5 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-
-    // ─── PORTFOLIO FUNCTIONS ─────────────────────────────────────────────────
-
-    fun fetchErgPrice(range: String = _uiState.value.chartRange) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val useHistory = oraclePriceStore.getHistory("use", range)
-                val sigOracleHistory = oraclePriceStore.getHistory("sigusd_oracle", range)
-                val sigDexHistory = oraclePriceStore.getHistory("sigusd_dex", range)
-                val currentPrice = oraclePriceStore.getLatestPrice("use")
-                withContext(Dispatchers.Main) {
-                    _uiState.value = _uiState.value.copy(
-                        ergPriceUsd = currentPrice,
-                        ergPriceHistory = useHistory,
-                        sigUsdOracleHistory = sigOracleHistory,
-                        sigUsdDexHistory = sigDexHistory,
-                        chartRange = range
-                    )
-                }
-            } catch (e: Exception) {
-                if (BuildConfig.DEBUG) Log.d(TAG, "Oracle price fetch failed: ${e.message}")
-            }
-        }
-    }
-
-    /** Sync oracle price data from chain on startup (lightweight — no market sync) */
-    fun syncOraclePrices() {
-        if (oracleSyncJob?.isActive == true) return
-        oracleSyncJob = viewModelScope.launch(Dispatchers.IO) {
-            try {
-                // 1. Load cached data from disk — fast, no network
-                oraclePriceStore.loadAll()
-
-                // 2. Show cached chart immediately
-                fetchErgPrice()
-
-                // 3. Sync oracle data only (USE, SigUSD, SigUSD DEX)
-                try {
-                    oraclePriceStore.syncAll(nodePool)
-                } catch (e: Exception) {
-                    if (BuildConfig.DEBUG) Log.d(TAG, "Oracle sync failed: ${e.message}")
-                }
-
-                // 4. Refresh chart with latest synced data
-                fetchErgPrice()
-
-                // 5. Load any cached market data from disk (no network)
-                val allTokens = tokenRepository.getWhitelistedTokensWithPools()
-                if (allTokens.isNotEmpty() && oraclePriceStore.allTokenMarketData.isEmpty()) {
-                    // Rebuild from cached files
-                    oraclePriceStore.rebuildMarketDataFromCache(allTokens)
-                    _uiState.value = _uiState.value.copy(
-                        tokenMarketData = oraclePriceStore.allTokenMarketData
-                    )
-                }
-
-                // 6. Check if market sync has ever completed
-                val prefs = getApplication<android.app.Application>()
-                    .getSharedPreferences("oracle_sync", android.content.Context.MODE_PRIVATE)
-                val lastSyncMs = prefs.getLong("lastMarketSyncMs", 0L)
-                val resumeIdx = prefs.getInt("allTokenResumeIndex", 0)
-                val totalTokens = allTokens.size
-                val incomplete = totalTokens > 0 && (lastSyncMs == 0L || resumeIdx in 1 until totalTokens)
-
-                _uiState.value = _uiState.value.copy(
-                    lastMarketSyncMs = lastSyncMs,
-                    marketSyncIncomplete = incomplete,
-                    marketSyncTotal = totalTokens
-                )
-
-                // 7. Market sync is user-controlled only — never auto-start
-            } catch (e: Exception) {
-                if (BuildConfig.DEBUG) Log.d(TAG, "Oracle sync failed: ${e.message}")
-            }
-        }
-    }
-
-    /**
-     * Start market sync — called from the sync dialog UI.
-     * Syncs all whitelisted tokens for ecosystem price/volume data.
-     * User-controlled: can be stopped via stopMarketSync().
-     */
-    fun startMarketSync() {
-        if (marketSyncJob?.isActive == true) return
-
-        val allTokens = tokenRepository.getWhitelistedTokensWithPools()
-        if (allTokens.isEmpty()) return
-
-        _uiState.value = _uiState.value.copy(
-            marketSyncState = "syncing",
-            marketSyncProgress = 0f,
-            marketSyncLabel = "",
-            marketSyncIndex = 0,
-            marketSyncTotal = allTokens.size
-        )
-
-        marketSyncJob = viewModelScope.launch(Dispatchers.IO) {
-            try {
-                oraclePriceStore.syncAllTokens(nodePool, allTokens)
-
-                // Sync completed fully
-                val now = System.currentTimeMillis()
-                val prefs = getApplication<android.app.Application>()
-                    .getSharedPreferences("oracle_sync", android.content.Context.MODE_PRIVATE)
-                prefs.edit().putLong("lastMarketSyncMs", now).apply()
-
-                val failedCount = oraclePriceStore.lastSyncFailedTokens.size
-                _uiState.value = _uiState.value.copy(
-                    tokenMarketData = oraclePriceStore.allTokenMarketData,
-                    marketSyncState = "completed",
-                    marketSyncProgress = 1f,
-                    lastMarketSyncMs = now,
-                    marketSyncIncomplete = false,
-                    syncFailedCount = failedCount
-                )
-                if (BuildConfig.DEBUG) Log.d(TAG, "Market sync completed, $failedCount failed")
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                // User stopped the sync — progress is saved by OraclePriceStore
-                _uiState.value = _uiState.value.copy(
-                    tokenMarketData = oraclePriceStore.allTokenMarketData,
-                    marketSyncState = "idle",
-                    marketSyncIncomplete = true
-                )
-                if (BuildConfig.DEBUG) Log.d(TAG, "Market sync stopped by user")
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    tokenMarketData = oraclePriceStore.allTokenMarketData,
-                    marketSyncState = "idle",
-                    marketSyncIncomplete = true
-                )
-                if (BuildConfig.DEBUG) Log.d(TAG, "Market sync failed: ${e.message}")
-            }
-        }
-    }
-
-    /** Stop market sync — called from dialog when user presses Stop */
-    fun stopMarketSync() {
-        marketSyncJob?.cancel()
-        marketSyncJob = null
-    }
-
-    /** Retry only the tokens that timed out in the previous sync run */
-    fun retryFailedSync() {
-        val failedTokens = oraclePriceStore.lastSyncFailedTokens
-        if (failedTokens.isEmpty() || marketSyncJob?.isActive == true) return
-
-        _uiState.value = _uiState.value.copy(
-            marketSyncState = "syncing",
-            marketSyncProgress = 0f,
-            marketSyncLabel = "",
-            marketSyncIndex = 0,
-            marketSyncTotal = failedTokens.size,
-            syncFailedCount = 0
-        )
-
-        marketSyncJob = viewModelScope.launch(Dispatchers.IO) {
-            try {
-                oraclePriceStore.syncAllTokens(nodePool, failedTokens)
-
-                val now = System.currentTimeMillis()
-                val retryFailedCount = oraclePriceStore.lastSyncFailedTokens.size
-                _uiState.value = _uiState.value.copy(
-                    tokenMarketData = oraclePriceStore.allTokenMarketData,
-                    marketSyncState = "completed",
-                    marketSyncProgress = 1f,
-                    lastMarketSyncMs = now,
-                    syncFailedCount = retryFailedCount
-                )
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                _uiState.value = _uiState.value.copy(
-                    tokenMarketData = oraclePriceStore.allTokenMarketData,
-                    marketSyncState = "idle",
-                    marketSyncIncomplete = true
-                )
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    tokenMarketData = oraclePriceStore.allTokenMarketData,
-                    marketSyncState = "idle"
-                )
-            }
-        }
-    }
-
-    fun setChartRange(range: String) {
-        _uiState.value = _uiState.value.copy(chartRange = range)
-        val token = _uiState.value.selectedChartToken
-        if (token != null) {
-            val history = oraclePriceStore.getTokenHistory(token, range)
-            _uiState.value = _uiState.value.copy(tokenPriceHistory = history)
-        } else {
-            fetchErgPrice(range)
-        }
-    }
-
-    /**
-     * Fully stop all in-flight price syncs, delete all cached oracle data, reset chart state,
-     * then kick off a clean full re-sync.
-     *
-     * IMPORTANT: Both jobs are cancelled with cancelAndJoin() — this waits until the coroutines
-     * have fully terminated (including any blocking saveToFile() calls). Plain cancel() does NOT
-     * interrupt blocking I/O, so without join() an in-flight sync can re-create the JSON files
-     * that clearAll() just deleted, causing stale partial data (e.g. 6 months) to persist.
-     */
-    fun clearAndResync() {
-        viewModelScope.launch {
-            // 1. Stop all in-flight syncs and WAIT for them to fully terminate.
-            //    cancelAndJoin() is a suspend function — it yields until the job is done.
-            oracleSyncJob?.cancelAndJoin()
-            oracleSyncJob = null
-            tokenSyncJob?.cancelAndJoin()
-            tokenSyncJob = null
-
-            // 2. NOW safe to delete — no background writer can race against the delete.
-            oraclePriceStore.clearAll()
-
-            // 3. Reset all chart UI state.
-            _uiState.value = _uiState.value.copy(
-                ergPriceUsd = null,
-                ergPriceHistory = emptyList(),
-                sigUsdOracleHistory = emptyList(),
-                sigUsdDexHistory = emptyList(),
-                selectedChartToken = null,
-                tokenPriceHistory = emptyList()
-            )
-
-            // 4. Kick off a fresh full re-sync.
-            syncOraclePrices()
-        }
-    }
-
-    /** Select a token to show its DEX price chart (in ERG) */
-    fun selectChartToken(tokenName: String?) {
-        // Cancel any in-flight token sync
-        tokenSyncJob?.cancel()
-        tokenSyncJob = null
-
-        val range = _uiState.value.chartRange
-        if (tokenName == null) {
-            _uiState.value = _uiState.value.copy(
-                selectedChartToken = null,
-                tokenPriceHistory = emptyList()
-            )
-            fetchErgPrice(range)
-            return
-        }
-
-        _uiState.value = _uiState.value.copy(
-            selectedChartToken = tokenName,
-            tokenPriceHistory = emptyList() // Clear stale data from previous token
-        )
-
-        // Load cached data immediately if available (price + volume)
-        if (oraclePriceStore.hasTokenData(tokenName)) {
-            val history = oraclePriceStore.getTokenHistory(tokenName, range)
-            val (v24, v7) = oraclePriceStore.getTokenVolume(tokenName)
-            _uiState.value = _uiState.value.copy(
-                tokenPriceHistory = history,
-                poolVolume24h = v24,
-                poolVolume7d = v7
-            )
-        }
-
-        // Sync from chain — cancel-safe, with node fallback
-        // Publishes intermediate data after each checkpoint save so chart loads progressively
-        tokenSyncJob = viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val poolNft = tokenRepository.getPoolNftForToken(tokenName) ?: return@launch
-                val decimals = tokenRepository.getDecimalsForToken(tokenName)
-                try {
-                    oraclePriceStore.syncTokenDex(nodePool, tokenName, poolNft, decimals) {
-                        // Checkpoint callback — update chart with data so far
-                        val h = oraclePriceStore.getTokenHistory(tokenName, range)
-                        if (h.isNotEmpty()) _uiState.value = _uiState.value.copy(tokenPriceHistory = h)
-                    }
-                } catch (e: Exception) {
-                    if (BuildConfig.DEBUG) Log.d(TAG, "Token sync failed: ${e.message}")
-                }
-                val history = oraclePriceStore.getTokenHistory(tokenName, range)
-                val (v24, v7) = oraclePriceStore.getTokenVolume(tokenName)
-                _uiState.value = _uiState.value.copy(
-                    tokenPriceHistory = history,
-                    poolVolume24h = v24,
-                    poolVolume7d = v7
-                )
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                if (BuildConfig.DEBUG) Log.d(TAG, "Token sync cancelled: $tokenName")
-                throw e
-            } catch (e: Exception) {
-                if (BuildConfig.DEBUG) Log.d(TAG, "Token chart sync failed: ${e.message}")
-            }
-        }
-
-        // Also fetch recent pool trades for the selected pair
-        viewModelScope.launch(Dispatchers.IO) { fetchPoolTrades(tokenName) }
-    }
-
-    /** Get list of token names that have DEX pools (for price chart dropdown) */
-    fun getTokensWithPools(): List<String> {
-        return tokenRepository.getTokenNamesWithPools()
-    }
-
-    /**
-     * Fetch the most recent trades for the selected token's pool.
-     * Derives trades from the delta between consecutive pool state boxes (pool NFT boxes).
-     * isBuy = pool gained ERG (user sold ERG to buy tokens)
-     * isSell = pool lost ERG (user sold tokens to get ERG)
-     */
-    @Suppress("UNCHECKED_CAST")
-    private suspend fun fetchPoolTrades(tokenName: String) {
-        val client = nodeClient ?: nodePool.next()
-        _uiState.value = _uiState.value.copy(isLoadingPoolTrades = true, poolTrades = emptyList(), poolVolume24h = 0.0, poolVolume7d = 0.0)
-        try {
-            val poolNft = tokenRepository.getPoolNftForToken(tokenName) ?: return
-            val decimals = tokenRepository.getDecimalsForToken(tokenName)
-            val tokenDiv = Math.pow(10.0, decimals.toDouble())
-            // Get the traded tokenId (asset index 2 in pool box)
-            val tokenId = tokenRepository.getTokenIdForName(tokenName) ?: ""
-            val nowMs = System.currentTimeMillis()
-            val currentHeight = try { client.getHeight() } catch (e: Exception) { 0 }
-
-            // Fetch the last ~16 pool state boxes — gives us ~15 trade deltas
-            val resp = client.api.getBoxesByTokenId(poolNft, 0, 16)
-            val boxes = resp["items"] as? List<Map<String, Any>> ?: return
-            if (boxes.size < 2) return
-
-            // Build raw trades (no trader address yet)
-            data class RawTrade(val isBuy: Boolean, val erg: Double, val tokens: Double, val timestamp: Long, val txId: String)
-            val rawTrades = mutableListOf<RawTrade>()
-            var vol24h = 0.0
-            var vol7d = 0.0
-            val cutoff24h = nowMs - 24 * 3_600_000L
-            val cutoff7d = nowMs - 7 * 24 * 3_600_000L
-
-            for (i in 0 until boxes.size - 1) {
-                val newer = boxes[i]
-                val older = boxes[i + 1]
-                val newerErg = (newer["value"] as? Number)?.toLong() ?: continue
-                val olderErg = (older["value"] as? Number)?.toLong() ?: continue
-                val newerAssets = newer["assets"] as? List<Map<String, Any>> ?: continue
-                val olderAssets = older["assets"] as? List<Map<String, Any>> ?: continue
-                if (newerAssets.size < 3 || olderAssets.size < 3) continue
-                val newerToken = (newerAssets[2]["amount"] as? Number)?.toLong() ?: continue
-                val olderToken = (olderAssets[2]["amount"] as? Number)?.toLong() ?: continue
-                val ergDelta = newerErg - olderErg
-                val tokenDelta = newerToken - olderToken
-                val ergAbs = Math.abs(ergDelta) / 1_000_000_000.0
-                val tokenAbs = Math.abs(tokenDelta) / tokenDiv
-                if (ergAbs < 0.001 && tokenAbs < 0.000001) continue
-                val txId = (newer["transactionId"] as? String) ?: ""
-                val height = (newer["inclusionHeight"] as? Number)?.toInt() ?: 0
-                val estimatedTs = if (currentHeight > 0 && height > 0)
-                    nowMs - (currentHeight - height) * 120_000L else 0L
-                rawTrades.add(RawTrade(ergDelta > 0, ergAbs, tokenAbs, estimatedTs, txId))
-
-                // Accumulate volume
-                if (estimatedTs >= cutoff24h) vol24h += ergAbs
-                if (estimatedTs >= cutoff7d) vol7d += ergAbs
-            }
-
-            // Publish without addresses immediately so UI shows fast
-            _uiState.value = _uiState.value.copy(
-                poolTrades = rawTrades.map { PoolTrade(it.isBuy, it.erg, it.tokens, it.timestamp, it.txId) },
-                isLoadingPoolTrades = false,
-                poolVolume24h = vol24h,
-                poolVolume7d = vol7d
-            )
-
-            // Now enrich with real tx timestamp + trader address concurrently
-            val enriched = coroutineScope {
-                rawTrades.map { raw ->
-                    async {
-                        try {
-                            if (raw.txId.isEmpty()) return@async PoolTrade(raw.isBuy, raw.erg, raw.tokens, raw.timestamp, raw.txId)
-                            val tx = client.api.getTransactionById(raw.txId)
-                                ?: return@async PoolTrade(raw.isBuy, raw.erg, raw.tokens, raw.timestamp, raw.txId)
-                            val realTs = (tx["timestamp"] as? Number)?.toLong() ?: raw.timestamp
-                            @Suppress("UNCHECKED_CAST")
-                            val outputs = tx["outputs"] as? List<Map<String, Any>> ?: emptyList()
-                            // For BUY trades: find the output that RECEIVES the traded token
-                            // For SELL trades: find the output that RECEIVES the most ERG (non-pool)
-                            val trader = if (raw.isBuy) {
-                                // Buyer: look for the output that holds the traded token
-                                outputs.firstOrNull { out ->
-                                    val assets = out["assets"] as? List<Map<String, Any>> ?: emptyList()
-                                    val hasPoolNft = assets.any { (it["tokenId"] as? String) == poolNft }
-                                    val hasTradedToken = tokenId.isNotEmpty() && assets.any { (it["tokenId"] as? String) == tokenId }
-                                    !hasPoolNft && hasTradedToken
-                                }?.get("address") as? String ?: ""
-                            } else {
-                                // Seller: look for the output with most ERG that is not the pool
-                                outputs.filter { out ->
-                                    val assets = out["assets"] as? List<Map<String, Any>> ?: emptyList()
-                                    val hasPoolNft = assets.any { (it["tokenId"] as? String) == poolNft }
-                                    !hasPoolNft
-                                }.maxByOrNull { (it["value"] as? Number)?.toLong() ?: 0L
-                                }?.get("address") as? String ?: ""
-                            }
-                            PoolTrade(raw.isBuy, raw.erg, raw.tokens, realTs, raw.txId, trader)
-                        } catch (e: Exception) {
-                            PoolTrade(raw.isBuy, raw.erg, raw.tokens, raw.timestamp, raw.txId)
-                        }
-                    }
-                }.awaitAll()
-            }
-            // Re-compute volume with real timestamps if available
-            val vol24hReal = enriched.filter { it.timestamp >= cutoff24h }.sumOf { it.ergAmount }
-            val vol7dReal = enriched.filter { it.timestamp >= cutoff7d }.sumOf { it.ergAmount }
-            _uiState.value = _uiState.value.copy(poolTrades = enriched, poolVolume24h = vol24hReal, poolVolume7d = vol7dReal)
-        } catch (e: Exception) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "fetchPoolTrades failed: ${e.message}")
-            _uiState.value = _uiState.value.copy(isLoadingPoolTrades = false)
-        }
-    }
-
-    /**
-     * AMM sell output: how much ERG you'd get selling `inputAmount` tokens.
-     * Uses constant-product formula with fee.
-     */
-    fun ammSellOutput(ergReserve: Long, tokenReserve: Long, inputAmount: Long, feePercent: Double): Long {
-        if (tokenReserve <= 0 || ergReserve <= 0 || inputAmount <= 0) return 0L
-        val feeNum = ((1.0 - feePercent) * 1000).toLong()
-        val feeDenom = 1000L
-        val numerator = ergReserve * inputAmount * feeNum
-        val denominator = tokenReserve * feeDenom + inputAmount * feeNum
-        return if (denominator > 0) numerator / denominator else 0L
-    }
-
-    private var isFetchingTokenValues = false
-
-    /**
-     * Batch-fetch USD values for all wallet tokens.
-     * For each token: find its DEX pool -> fetch pool box -> AMM sell full balance -> multiply by ERG price.
-     * Stores results in SwapState.tokenUsdValues.
-     * Guarded: skips if already fetching or if cached values exist for current tokens.
-     */
-    fun fetchTokenUsdValues(force: Boolean = false) {
-        if (isFetchingTokenValues) return
-        val client = nodeClient ?: return
-        
-        // Always fetch ERG/USD price from the USE oracle (on-chain, not CoinGecko)
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val oracleBox = client.getPoolBox(
-                    com.piggytrade.piggytrade.stablecoin.use.UseConfig.ORACLE_NFT,
-                    false
-                )
-                if (oracleBox != null) {
-                    val regs = oracleBox["additionalRegisters"] as? Map<String, Any> ?: emptyMap()
-                    val r4 = regs["R4"] as? String ?: "0500"
-                    val oracleRate = com.piggytrade.piggytrade.stablecoin.VlqCodec.decode(r4)
-                    if (oracleRate > 0) {
-                        // oracleRate = nanoERG per 1 USD → USD per ERG = 1e9 / oracleRate
-                        val usdPerErg = 1_000_000_000.0 / oracleRate.toDouble()
-                        withContext(Dispatchers.Main) {
-                            _uiState.value = _uiState.value.copy(ergPriceUsd = usdPerErg)
-                        }
-                        fetchTokenUsdValuesInternal(usdPerErg, force)
-                    }
-                }
-            } catch (e: Exception) {
-                if (BuildConfig.DEBUG) Log.d(TAG, "Oracle price fetch failed: ${e.message}")
-            }
-        }
-    }
-    
-    @Suppress("UNCHECKED_CAST")
-    private fun fetchTokenUsdValuesInternal(ergPrice: Double, force: Boolean) {
-        if (isFetchingTokenValues) return
-        val tokens = _uiState.value.walletTokens
-        if (tokens.isEmpty()) return
-
-        // Skip if we already have values (unless forced).
-        // Most wallet tokens are NFTs without pools, so checking "all cached" never passes.
-        if (!force && _uiState.value.tokenUsdValues.isNotEmpty()) return
-
-        // Get ALL ERG-only pools (not T2T)
-        val allPools = (_uiState.value.whitelistedPools + _uiState.value.discoveredPools)
-            .filter { !it.data.containsKey("id_in") && it.pid.isNotEmpty() }
-        if (allPools.isEmpty()) return
-
-        isFetchingTokenValues = true
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                data class PoolBoxResult(
-                    val pool: PoolMapping,
-                    val tokenId: String,
-                    val ergReserve: Long,
-                    val tokenReserve: Long,
-                    val fee: Double
-                )
-                
-                val poolResults = mutableListOf<PoolBoxResult>()
-                val matchedTokenIds = mutableSetOf<String>()
-                
-                // ── TIER 1: Direct match via pool.data["id"] (enriched/synced pools) ──
-                // Synced pools have "id" = token ID. Match against wallet tokens instantly.
-                // Still need pool box data for reserves, so check cache or queue for fetch.
-                val walletTokenSet = tokens.keys.toSet()
-                val poolsNeedingBoxData = mutableListOf<PoolMapping>()
-                
-                for (pool in allPools) {
-                    val tokenId = pool.data["id"] as? String ?: continue
-                    if (tokenId !in walletTokenSet) continue // Not in wallet, skip
-                    if (tokenId in matchedTokenIds) continue // Already matched by a better pool
-                    
-                    val amount = tokens[tokenId] ?: 0L
-                    if (amount <= 0L) continue
-                    
-                    // Try cache first
-                    val cached = synchronized(poolBoxDataCache) { poolBoxDataCache[pool.pid] }
-                    if (cached != null) {
-                        val assets = cached["assets"] as? List<Map<String, Any>>
-                        if (assets != null && assets.size >= 3) {
-                            val ergReserve = (cached["value"] as? Number)?.toLong() ?: 0L
-                            val tokenReserve = (assets[2]["amount"] as? Number)?.toLong() ?: 0L
-                            val fee = pool.data["fee"] as? Double ?: 0.003
-                            poolResults.add(PoolBoxResult(pool, tokenId, ergReserve, tokenReserve, fee))
-                            matchedTokenIds.add(tokenId)
-                            continue
-                        }
-                    }
-                    // Queue for fetch
-                    poolsNeedingBoxData.add(pool)
-                }
-                
-                // ── TIER 2: Pool box cache (from liquidity fetch) for pools without data["id"] ──
-                for (pool in allPools) {
-                    if (pool.data.containsKey("id")) continue // Already handled in Tier 1
-                    val cached = synchronized(poolBoxDataCache) { poolBoxDataCache[pool.pid] } ?: continue
-                    val assets = cached["assets"] as? List<Map<String, Any>> ?: continue
-                    if (assets.size < 3) continue
-                    val tokenId = assets[2]["tokenId"] as? String ?: continue
-                    if (tokenId !in walletTokenSet || tokenId in matchedTokenIds) continue
-                    val ergReserve = (cached["value"] as? Number)?.toLong() ?: 0L
-                    val tokenReserve = (assets[2]["amount"] as? Number)?.toLong() ?: 0L
-                    val fee = pool.data["fee"] as? Double ?: 0.003
-                    poolResults.add(PoolBoxResult(pool, tokenId, ergReserve, tokenReserve, fee))
-                    matchedTokenIds.add(tokenId)
-                }
-                
-                // ── TIER 3: Fetch remaining pools that need box data ──
-                // Also fetch pools without data["id"] that weren't in cache
-                val unmatchedTokens = walletTokenSet - matchedTokenIds
-                if (unmatchedTokens.isNotEmpty()) {
-                    // Add non-enriched pools that might hold unmatched tokens
-                    for (pool in allPools) {
-                        if (pool.data.containsKey("id")) continue
-                        if (pool.pid in poolBoxDataCache) continue // Already checked in Tier 2
-                        poolsNeedingBoxData.add(pool)
-                    }
-                }
-                
-                if (poolsNeedingBoxData.isNotEmpty()) {
-                    val jobs = poolsNeedingBoxData.map { pool ->
-                        async {
-                            try {
-                                nodePool.withRetry { poolClient ->
-                                    val box = poolClient.getPoolBox(pool.pid, _uiState.value.includeUnconfirmed) ?: return@withRetry
-                                    val assets = box["assets"] as? List<Map<String, Any>> ?: return@withRetry
-                                    if (assets.size < 3) return@withRetry
-                                    val tokenId = assets[2]["tokenId"] as? String ?: return@withRetry
-                                    val ergReserve = (box["value"] as? Number)?.toLong() ?: 0L
-                                    val tokenReserve = (assets[2]["amount"] as? Number)?.toLong() ?: 0L
-                                    val fee = pool.data["fee"] as? Double ?: 0.003
-                                    synchronized(poolResults) {
-                                        poolResults.add(PoolBoxResult(pool, tokenId, ergReserve, tokenReserve, fee))
-                                    }
-                                    synchronized(poolBoxDataCache) { poolBoxDataCache[pool.pid] = box }
-                                }
-                            } catch (e: Exception) {
-                                if (BuildConfig.DEBUG) {
-                                    Log.d(TAG, "Pool box fetch failed for ${pool.key}: ${e.message}")
-                                }
-                            }
-                            Unit
-                        }
-                    }
-                    jobs.awaitAll()
-                }
-
-                // Step 2: For each wallet token, find matching pool(s) and calculate spot price
-                // Use the most liquid pool (highest ERG reserve, prefer whitelisted)
-                if (BuildConfig.DEBUG) Log.d(TAG, "Calculating spot prices with ergPrice=$ergPrice, poolResults=${poolResults.size}")
-                val results = mutableMapOf<String, Double>()
-                for ((walletTokenId, amount) in tokens) {
-                    if (amount <= 0L) continue
-                    
-                    // Find ALL pools that hold this token
-                    val matchingPools = poolResults.filter { it.tokenId == walletTokenId }
-                    if (matchingPools.isEmpty()) continue
-                    
-                    // Pick the most liquid pool: prefer whitelisted, then highest ERG reserve
-                    val bestPool = matchingPools
-                        .sortedWith(compareByDescending<PoolBoxResult> { it.pool.isWhitelisted }
-                            .thenByDescending { it.ergReserve })
-                        .first()
-                    
-                    // AMM constant-product formula: actual ERG output for selling full balance
-                    // outputErg = (inputTokens × ergReserve × feeNum) / (tokenReserve × feeDenom + inputTokens × feeNum)
-                    // Uses Double to prevent Long overflow (amount × ergReserve × feeNum can exceed Long.MAX_VALUE)
-                    // Then multiply ERG value by USE oracle price
-                    if (bestPool.tokenReserve > 0 && bestPool.ergReserve > 0) {
-                        val feeNum = (1.0 - bestPool.fee) * 1000.0  // e.g. 0.003 fee → 997.0
-                        val feeDenom = 1000.0
-                        val amt = amount.toDouble()
-                        val ergRes = bestPool.ergReserve.toDouble()
-                        val tokRes = bestPool.tokenReserve.toDouble()
-                        val outputNanoErg = (amt * ergRes * feeNum) / (tokRes * feeDenom + amt * feeNum)
-                        val totalErgValue = outputNanoErg / 1_000_000_000.0
-                        val usdValue = totalErgValue * ergPrice
-                        if (BuildConfig.DEBUG) {
-                            val name = getTokenName(walletTokenId)
-                            Log.d(TAG, "  CALC $name: ergRes=${bestPool.ergReserve} tokRes=${bestPool.tokenReserve} amt=$amount fee=${bestPool.fee} outputNanoErg=${"%.0f".format(outputNanoErg)} ergVal=${"%.6f".format(totalErgValue)} usd=${"%.6f".format(usdValue)} pool=${bestPool.pool.key}")
-                        }
-                        if (usdValue > 0.0) {
-                            results[walletTokenId] = usdValue
-                        }
-                    }
-                }
-
-                if (BuildConfig.DEBUG) {
-                    val unmatchedWallet = tokens.keys.filter { tid -> tid !in results.keys && (tokens[tid] ?: 0L) > 0L }
-                    Log.d(TAG, "Token USD: ${results.size} priced, ${unmatchedWallet.size} unmatched from ${poolResults.size} pool results (${allPools.size} total pools)")
-                    Log.d(TAG, "  Tier1 matched=${matchedTokenIds.size}, needFetch=${poolsNeedingBoxData.size}, cache=${poolBoxDataCache.size}")
-                    for ((tid, usd) in results) {
-                        val name = getTokenName(tid)
-                        Log.d(TAG, "  PRICED: $name = $${"%.2f".format(usd)}")
-                    }
-                    for (tid in unmatchedWallet.filter { allPools.any { p -> (p.data["id"] as? String) == it } }) {
-                        val name = getTokenName(tid)
-                        Log.d(TAG, "  HAS_POOL_BUT_UNPRICED: $name (${tid.take(8)})")
-                    }
-                }
-
-                withContext(Dispatchers.Main) {
-                    _uiState.value = _uiState.value.copy(tokenUsdValues = results)
-                }
-            } finally {
-                isFetchingTokenValues = false
-            }
-        }
-    }
-
-    fun getTokenUsdValue(tokenId: String): Double? {
-        return _uiState.value.tokenUsdValues[tokenId]
-    }
-
-    // ─── ECOSYSTEM FUNCTIONS ─────────────────────────────────────────────────
-
-    /**
-     * Master function: fetches TVL + recent ecosystem activity.
-     * Shows cached data instantly, then refreshes from network.
-     */
-    fun fetchEcosystemData(forceRefresh: Boolean = false) {
-        val now = System.currentTimeMillis()
-        if (!forceRefresh && _uiState.value.isLoadingEcosystem) return
-        if (!forceRefresh && now - _uiState.value.ecosystemLastFetched < 60_000) return
-
-        val client = nodeClient ?: return
-
-        // Show cached data instantly (no network)
-        if (_uiState.value.ecosystemActivity.isEmpty()) {
-            val cached = loadEcosystemCache()
-            if (cached.isNotEmpty()) {
-                ecosystemActivityCache = cached
-                _uiState.value = _uiState.value.copy(ecosystemActivity = cached)
-            }
-        }
-
-        _uiState.value = _uiState.value.copy(isLoadingEcosystem = true)
-        ecosystemPage = 0
-
-        // Ensure ERG price is available for USD conversion
-        if (_uiState.value.ergPriceUsd == null) {
-            fetchErgPrice()
-        }
-
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val tvlJob = async { fetchEcosystemTvlInternal(client) }
-                val activityJob = async { fetchEcosystemActivityInternal(client) }
-
-                val tvl = tvlJob.await()
-                val allActivity = activityJob.await()
-
-                // Save to disk for instant display next time
-                saveEcosystemCache(allActivity)
-
-                withContext(Dispatchers.Main) {
-                    ecosystemActivityCache = allActivity
-                    _uiState.value = _uiState.value.copy(
-                        ecosystemTvl = tvl,
-                        ecosystemActivity = allActivity,
-                        isLoadingEcosystem = false,
-                        ecosystemLastFetched = System.currentTimeMillis()
-                    )
-                }
-            } catch (e: Exception) {
-                if (BuildConfig.DEBUG) Log.d(TAG, "Ecosystem fetch failed: ${e.message}")
-                withContext(Dispatchers.Main) {
-                    _uiState.value = _uiState.value.copy(isLoadingEcosystem = false)
-                }
-            }
-        }
-    }
-
-    /**
-     * Load more ecosystem activity from network (cache exhausted).
-     */
-    fun fetchMoreEcosystemActivity() {
-        if (_uiState.value.isLoadingEcosystem) return
-
-        val client = nodeClient ?: return
-        _uiState.value = _uiState.value.copy(isLoadingEcosystem = true)
-        ecosystemPage++
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val more = fetchEcosystemActivityInternal(client, offset = ecosystemPage * 30)
-                withContext(Dispatchers.Main) {
-                    ecosystemActivityCache = (ecosystemActivityCache + more)
-                        .distinctBy { it.txId }
-                        .sortedByDescending { it.timestamp }
-                    _uiState.value = _uiState.value.copy(
-                        ecosystemActivity = ecosystemActivityCache,
-                        isLoadingEcosystem = false
-                    )
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    _uiState.value = _uiState.value.copy(isLoadingEcosystem = false)
-                }
-            }
-        }
-    }
-
-    /** Full sorted cache of ecosystem activity (all protocols merged) */
-    private var ecosystemActivityCache: List<EcosystemTx> = emptyList()
-    /** Tracks current pagination page for ecosystem activity */
-    private var ecosystemPage = 0
-
-    /** Cached raw pool box data from liquidity fetch — maps pid -> box map */
-    private val poolBoxDataCache = mutableMapOf<String, Map<String, Any>>()
-
-    /** Save ecosystem activity cache to disk for instant display on next tab switch */
-    private fun saveEcosystemCache(activity: List<EcosystemTx>) {
-        try {
-            val arr = org.json.JSONArray()
-            for (tx in activity.take(100)) { // Cap at 100 entries to keep file small
-                arr.put(org.json.JSONObject().apply {
-                    put("txId", tx.txId)
-                    put("protocol", tx.protocol)
-                    put("timestamp", tx.timestamp)
-                    put("traderAddress", tx.traderAddress)
-                    put("sent", tx.sent)
-                    put("received", tx.received)
-                    put("priceImpact", tx.priceImpact ?: org.json.JSONObject.NULL)
-                    put("isConfirmed", tx.isConfirmed)
-                })
-            }
-            val ctx = getApplication<android.app.Application>()
-            java.io.File(ctx.filesDir, "ecosystem_cache.json").writeText(arr.toString())
-        } catch (e: Exception) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "Save ecosystem cache failed: ${e.message}")
-        }
-    }
-
-    /** Load ecosystem activity from disk cache */
-    private fun loadEcosystemCache(): List<EcosystemTx> {
-        try {
-            val ctx = getApplication<android.app.Application>()
-            val file = java.io.File(ctx.filesDir, "ecosystem_cache.json")
-            if (!file.exists()) return emptyList()
-            val arr = org.json.JSONArray(file.readText())
-            val result = mutableListOf<EcosystemTx>()
-            for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                result.add(EcosystemTx(
-                    txId = obj.getString("txId"),
-                    protocol = obj.getString("protocol"),
-                    timestamp = obj.getLong("timestamp"),
-                    traderAddress = obj.optString("traderAddress", ""),
-                    sent = obj.optString("sent", ""),
-                    received = obj.optString("received", ""),
-                    priceImpact = if (obj.isNull("priceImpact")) null else obj.getDouble("priceImpact"),
-                    isConfirmed = obj.optBoolean("isConfirmed", true)
-                ))
-            }
-            return result
-        } catch (e: Exception) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "Load ecosystem cache failed: ${e.message}")
-            return emptyList()
-        }
-    }
-
-    /**
-     * Fetch ERG TVL for key protocol contracts in parallel.
-     */
-    private suspend fun fetchEcosystemTvlInternal(client: NodeClient): Map<String, Double> =
-        coroutineScope {
-            val contracts = mapOf(
-                "Spectrum DEX" to NetworkConfig.SPECTRUM_ADDRESS,
-                "SigmaUSD" to "MUbV38YgqHy7XbsoXWF5z7EZm524Ybdwe5p9WDrbhruZRtehkRPT92imXer2eTkjwPDfboa1pR3zb3deVKVq3H7Xt98qcTqLuSBSbHb7izzo5jphEpcnqyKJ2xhmpNPVvmtbdJNdvdopPrHHDBbAGGeW7XYTQwEeoRfosXzcDtiGgw97b2aqjTsNFmZk7khBEQywjYfmoDc9nUCJMZ3vbSspnYo3LarLe55mh2Np8MNJqUN9APA6XkhZCrTTDRZb1B4krgFY1sVMswg2ceqguZRvC9pqt3tUUxmSnB24N6dowfVJKhLXwHPbrkHViBv1AKAJTmEaQW2DN1fRmD9ypXxZk8GXmYtxTtrj3BiunQ4qzUCu1eGzxSREjpkFSi2ATLSSDqUwxtRz639sHM6Lav4axoJNPCHbY8pvuBKUxgnGRex8LEGM8DeEJwaJCaoy8dBw9Lz49nq5mSsXLeoC4xpTUmp47Bh7GAZtwkaNreCu74m9rcZ8Di4w1cmdsiK1NWuDh9pJ2Bv7u3EfcurHFVqCkT3P86JUbKnXeNxCypfrWsFuYNKYqmjsix82g9vWcGMmAcu5nagxD4iET86iE2tMMfZZ5vqZNvntQswJyQqv2Wc6MTh4jQx1q2qJZCQe4QdEK63meTGbZNNKMctHQbp3gRkZYNrBtxQyVtNLR8xEY8zGp85GeQKbb37vqLXxRpGiigAdMe3XZA4hhYPmAAU5hpSMYaRAjtvvMT3bNiHRACGrfjvSsEG9G2zY5in2YWz5X9zXQLGTYRsQ4uNFkYoQRCBdjNxGv6R58Xq74zCgt19TxYZ87gPWxkXpWwTaHogG1eps8WXt8QzwJ9rVx6Vu9a5GjtcGsQxHovWmYixgBU8X9fPNJ9UQhYyAWbjtRSuVBtDAmoV1gCBEPwnYVP5GCGhCocbwoYhZkZjFZy6ws4uxVLid3FxuvhWvQrVEDYp7WRvGXbNdCbcSXnbeTrPMey1WPaXX",
-                "USE Bank" to com.piggytrade.piggytrade.stablecoin.use.UseConfig.BANK_ADDRESS,
-                "USE Pool" to (NetworkConfig.USE_CONFIG["pool_address"] as String),
-                "DexyGold Bank" to com.piggytrade.piggytrade.stablecoin.dexygold.DexyGoldConfig.BANK_ADDRESS,
-                "DexyGold Pool" to (NetworkConfig.DEXYGOLD_CONFIG["pool_address"] as String)
-            )
-
-            val jobs = contracts.map { (name, address) ->
-                async {
-                    try {
-                        nodePool.withRetry { poolClient ->
-                            val mediaType = "application/json".toMediaTypeOrNull()
-                            val jsonAddress = "\"$address\""
-                            val isMultiBox = name.contains("Spectrum") // Spectrum has many pool boxes
-                            var totalErg = 0L
-                            var maxErg = 0L
-                            var offset = 0
-                            val pageLimit = if (isMultiBox) 2 else 1
-                            for (page in 0 until pageLimit) {
-                                val boxes = poolClient.api.getUnspentBoxesByAddressPost(
-                                    offset = offset, limit = 50,
-                                    includeUnconfirmed = false, excludeMempoolSpent = false,
-                                    address = jsonAddress.toRequestBody(mediaType)
-                                )
-                                for (box in boxes) {
-                                    val v = (box["value"] as? Number)?.toLong() ?: 0L
-                                    totalErg += v
-                                    if (v > maxErg) maxErg = v
-                                }
-                                if (boxes.size < 50) break
-                                offset += 50
-                            }
-                            val ergValue = if (isMultiBox) totalErg else maxErg
-                            name to (ergValue.toDouble() / 1_000_000_000.0)
-                        }
-                    } catch (e: Exception) {
-                        if (BuildConfig.DEBUG) Log.d(TAG, "TVL fetch failed for $name: ${e.message}")
-                        name to 0.0
-                    }
-                }
-            }
-            jobs.awaitAll().toMap()
-        }
-
-    /** Protocol addresses to scan for ecosystem activity */
-    private val ecosystemProtocols = mapOf(
-        NetworkConfig.SPECTRUM_ADDRESS to "DEX Swap",
-        NetworkConfig.SPECTRUM_TOKEN_ADDRESS to "DEX T2T",
-        // USE and DexyGold share the same LP swap contract address — label generically here,
-        // then refine to "USE LP Swap" / "DexyGold LP Swap" in parseEcosystemTx via LP NFT detection
-        (NetworkConfig.USE_CONFIG["lp_swap_address"] as String) to "LP Swap",
-        // Bank addresses capture ALL mints (freemint, arbmint) AND redeems
-        // Freemint/arbmint P2S addresses are NOT indexed by nodes — use bank instead
-        com.piggytrade.piggytrade.stablecoin.use.UseConfig.BANK_ADDRESS to "USE Bank",
-        com.piggytrade.piggytrade.stablecoin.dexygold.DexyGoldConfig.BANK_ADDRESS to "DexyGold Bank",
-        // SigmaUSD Bank
-        "MUbV38YgqHy7XbsoXWF5z7EZm524Ybdwe5p9WDrbhruZRtehkRPT92imXer2eTkjwPDfboa1pR3zb3deVKVq3H7Xt98qcTqLuSBSbHb7izzo5jphEpcnqyKJ2xhmpNPVvmtbdJNdvdopPrHHDBbAGGeW7XYTQwEeoRfosXzcDtiGgw97b2aqjTsNFmZk7khBEQywjYfmoDc9nUCJMZ3vbSspnYo3LarLe55mh2Np8MNJqUN9APA6XkhZCrTTDRZb1B4krgFY1sVMswg2ceqguZRvC9pqt3tUUxmSnB24N6dowfVJKhLXwHPbrkHViBv1AKAJTmEaQW2DN1fRmD9ypXxZk8GXmYtxTtrj3BiunQ4qzUCu1eGzxSREjpkFSi2ATLSSDqUwxtRz639sHM6Lav4axoJNPCHbY8pvuBKUxgnGRex8LEGM8DeEJwaJCaoy8dBw9Lz49nq5mSsXLeoC4xpTUmp47Bh7GAZtwkaNreCu74m9rcZ8Di4w1cmdsiK1NWuDh9pJ2Bv7u3EfcurHFVqCkT3P86JUbKnXeNxCypfrWsFuYNKYqmjsix82g9vWcGMmAcu5nagxD4iET86iE2tMMfZZ5vqZNvntQswJyQqv2Wc6MTh4jQx1q2qJZCQe4QdEK63meTGbZNNKMctHQbp3gRkZYNrBtxQyVtNLR8xEY8zGp85GeQKbb37vqLXxRpGiigAdMe3XZA4hhYPmAAU5hpSMYaRAjtvvMT3bNiHRACGrfjvSsEG9G2zY5in2YWz5X9zXQLGTYRsQ4uNFkYoQRCBdjNxGv6R58Xq74zCgt19TxYZ87gPWxkXpWwTaHogG1eps8WXt8QzwJ9rVx6Vu9a5GjtcGsQxHovWmYixgBU8X9fPNJ9UQhYyAWbjtRSuVBtDAmoV1gCBEPwnYVP5GCGhCocbwoYhZkZjFZy6ws4uxVLid3FxuvhWvQrVEDYp7WRvGXbNdCbcSXnbeTrPMey1WPaXX" to "SigmaUSD Bank"
-    )
-
-    /**
-     * Fetch recent ecosystem activity from all protocol addresses.
-     * Returns ALL merged results (no limit) — the caller handles display pagination.
-     * Fetches 100 per protocol; "load more" pagination handles further pages.
-     */
-    @Suppress("UNCHECKED_CAST")
-    private suspend fun fetchEcosystemActivityInternal(
-        client: NodeClient, offset: Int = 0
-    ): List<EcosystemTx> = coroutineScope {
-        val mediaType = "application/json".toMediaTypeOrNull()
-        val pageSize = 30
-
-        val jobs = ecosystemProtocols.map { (address, protocolLabel) ->
-            async {
-                try {
-                    nodePool.withRetry { poolClient ->
-                        val reqBody = "\"$address\"".toRequestBody(mediaType)
-                        val resp = poolClient.api.getTransactionsByAddress(
-                            offset = offset, limit = pageSize, address = reqBody
-                        )
-                        val items = resp["items"] as? List<Map<String, Any>> ?: emptyList()
-                        if (BuildConfig.DEBUG) Log.d(TAG, "Ecosystem $protocolLabel: ${items.size} txs at offset=$offset")
-                        items.mapNotNull { tx -> parseEcosystemTx(tx, address, protocolLabel) }
-                    }
-                } catch (e: Exception) {
-                    if (BuildConfig.DEBUG) Log.d(TAG, "Ecosystem activity fetch failed for $protocolLabel: ${e.message}")
-                    emptyList()
-                }
-            }
-        }
-
-        jobs.awaitAll()
-            .flatten()
-            .distinctBy { it.txId }
-            .sortedByDescending { it.timestamp }
-    }
-
-    /**
-     * Parse a raw transaction into an EcosystemTx with human-readable sent/received descriptions.
-     * For DEX swaps, calculates price impact from pool reserve changes.
-     */
-    @Suppress("UNCHECKED_CAST")
-    private fun parseEcosystemTx(
-        tx: Map<String, Any>, protocolAddress: String, protocolLabel: String
-    ): EcosystemTx? {
-        val txId = tx["id"] as? String ?: return null
-        val timestamp = (tx["timestamp"] as? Number)?.toLong() ?: System.currentTimeMillis()
-        val numConf = (tx["numConfirmations"] as? Number)?.toInt() ?: 0
-        val isConfirmed = numConf > 0
-
-        val rawInputs = tx["inputs"] as? List<Map<String, Any>> ?: emptyList()
-        val rawOutputs = tx["outputs"] as? List<Map<String, Any>> ?: emptyList()
-
-        // For bank transactions, detect specific mint type from NFTs in the tx
-        var effectiveLabel = protocolLabel
-        if (protocolLabel.contains("Bank")) {
-            val allTokenIds = mutableSetOf<String>()
-            for (box in rawInputs + rawOutputs) {
-                for (a in (box["assets"] as? List<Map<String, Any>> ?: emptyList())) {
-                    (a["tokenId"] as? String)?.let { allTokenIds.add(it) }
-                }
-            }
-            val useFreemintNft = com.piggytrade.piggytrade.stablecoin.use.UseConfig.FREEMINT_NFT
-            val useArbmintNft = com.piggytrade.piggytrade.stablecoin.use.UseConfig.ARBMINT_NFT
-            val dexyFreemintNft = com.piggytrade.piggytrade.stablecoin.dexygold.DexyGoldConfig.FREEMINT_NFT
-            val dexyArbmintNft = com.piggytrade.piggytrade.stablecoin.dexygold.DexyGoldConfig.ARBMINT_NFT
-            effectiveLabel = when {
-                allTokenIds.contains(useFreemintNft) -> "USE Freemint"
-                allTokenIds.contains(useArbmintNft) -> "USE Arbmint"
-                allTokenIds.contains(dexyFreemintNft) -> "DexyGold Freemint"
-                allTokenIds.contains(dexyArbmintNft) -> "DexyGold Arbmint"
-                else -> protocolLabel
-            }
-        } else if (protocolLabel == "LP Swap") {
-            // USE and DexyGold share the same contract address — identify by LP NFT in the tx
-            val allTokenIds = mutableSetOf<String>()
-            for (box in rawInputs + rawOutputs) {
-                for (a in (box["assets"] as? List<Map<String, Any>> ?: emptyList())) {
-                    (a["tokenId"] as? String)?.let { allTokenIds.add(it) }
-                }
-            }
-            val useLpNft = NetworkConfig.USE_CONFIG["lp_nft"] as? String ?: ""
-            val dexyLpNft = NetworkConfig.DEXYGOLD_CONFIG["lp_nft"] as? String ?: ""
-            effectiveLabel = when {
-                useLpNft.isNotEmpty() && allTokenIds.contains(useLpNft) -> "USE LP Swap"
-                dexyLpNft.isNotEmpty() && allTokenIds.contains(dexyLpNft) -> "DexyGold LP Swap"
-                else -> "LP Swap"
-            }
-        }
-
-        // Find the trader's address
-        // Direct swaps: trader's address is in BOTH inputs and outputs (they get change back)
-        // Proxy swaps: proxy contract is in inputs only (consumed), real trader is in outputs only
-        val knownAddresses = ecosystemProtocols.keys +
-            NetworkConfig.KNOWN_PROTOCOLS.keys
-        var traderAddr = ""
-        var traderFoundInInputs = false
-        // Try inputs first — find a non-protocol input address
-        for (inp in rawInputs) {
-            val addr = inp["address"] as? String ?: ""
-            if (addr.isNotEmpty() && !knownAddresses.any { addr.startsWith(it.take(30)) }) {
-                // Verify this address also appears in outputs (real trader gets change back)
-                // If it doesn't appear in outputs, it's a proxy contract (consumed), not the trader
-                val inOutputs = rawOutputs.any { outp ->
-                    (outp["address"] as? String ?: "").startsWith(addr.take(30))
-                }
-                if (inOutputs) {
-                    traderAddr = addr
-                    traderFoundInInputs = true
-                }
-                break
-            }
-        }
-        // If no real trader found in inputs (proxy contract scenario), check outputs
-        // The real trader is the output that receives tokens (not the pool, bot fee, or miner fee)
-        if (traderAddr.isEmpty()) {
-            for (outp in rawOutputs) {
-                val addr = outp["address"] as? String ?: ""
-                if (addr.isNotEmpty() && !knownAddresses.any { addr.startsWith(it.take(30)) }) {
-                    val assets = outp["assets"] as? List<Map<String, Any>> ?: emptyList()
-                    val value = (outp["value"] as? Number)?.toLong() ?: 0L
-                    // Skip tiny bot-fee outputs (~0.004 ERG with no tokens)
-                    if (assets.isNotEmpty() || value > 10_000_000L) {
-                        traderAddr = addr
-                        break
-                    }
-                }
-            }
-        }
-        // Final fallback: any non-protocol output
-        if (traderAddr.isEmpty()) {
-            for (outp in rawOutputs) {
-                val addr = outp["address"] as? String ?: ""
-                if (addr.isNotEmpty() && !knownAddresses.any { addr.startsWith(it.take(30)) }) {
-                    traderAddr = addr
-                    break
-                }
-            }
-        }
-        if (traderAddr.isEmpty()) traderAddr = "Unknown"
-
-        // Build sent/received descriptions
-        val sentParts = mutableListOf<String>()
-        val recvParts = mutableListOf<String>()
-
-        // Proxy swap detection for DEX: trader found only in outputs = batch bot executed via proxy
-        val isDexSwap = effectiveLabel.contains("DEX") || effectiveLabel.contains("LP Swap")
-        val isProxySwap = isDexSwap && !traderFoundInInputs
-
-        if (isProxySwap) {
-            // Compute from pool box reserve deltas
-            // Structure: 2 inputs (pool + proxy), 4 outputs (pool, user, bot fee, miner fee)
-            val poolInput = rawInputs.find { box ->
-                val addr = box["address"] as? String ?: ""
-                val assets = box["assets"] as? List<Map<String, Any>> ?: emptyList()
-                addr.startsWith(protocolAddress.take(30)) && assets.size >= 3
-            }
-            val poolOutput = rawOutputs.find { box ->
-                val addr = box["address"] as? String ?: ""
-                val assets = box["assets"] as? List<Map<String, Any>> ?: emptyList()
-                addr.startsWith(protocolAddress.take(30)) && assets.size >= 3
-            }
-            if (poolInput != null && poolOutput != null) {
-                val poolErgIn = (poolInput["value"] as? Number)?.toLong() ?: 0L
-                val poolErgOut = (poolOutput["value"] as? Number)?.toLong() ?: 0L
-                val poolErgDelta = poolErgOut - poolErgIn
-
-                val pInAssets = poolInput["assets"] as? List<Map<String, Any>> ?: emptyList()
-                val pOutAssets = poolOutput["assets"] as? List<Map<String, Any>> ?: emptyList()
-
-                // assets[1] = LP tokens in pool
-                val lpTokenIn = (pInAssets.getOrNull(1)?.get("amount") as? Number)?.toLong() ?: 0L
-                val lpTokenOut = (pOutAssets.getOrNull(1)?.get("amount") as? Number)?.toLong() ?: 0L
-                val lpDelta = lpTokenOut - lpTokenIn
-
-                // assets[2] = trading token
-                val tokenId = pInAssets.getOrNull(2)?.get("tokenId") as? String ?: ""
-                val poolTokenIn = (pInAssets.getOrNull(2)?.get("amount") as? Number)?.toLong() ?: 0L
-                val poolTokenOut = (pOutAssets.getOrNull(2)?.get("amount") as? Number)?.toLong() ?: 0L
-                val poolTokenDelta = poolTokenOut - poolTokenIn
-
-                if (lpDelta > 0) {
-                    // ── LP Withdrawal: LP tokens returned to pool, user gets ERG + tokens ──
-                    effectiveLabel = "DEX LP Withdraw"
-                    // LP tokens went into pool = user sent LP
-                    val lpTokenId = pInAssets.getOrNull(1)?.get("tokenId") as? String ?: ""
-                    if (lpTokenId.isNotEmpty()) {
-                        val lpName = getTokenName(lpTokenId)
-                        val lpFormatted = formatBalance(lpTokenId, lpDelta)
-                        sentParts.add("$lpFormatted $lpName")
-                    }
-                    // Pool lost ERG = user received ERG
-                    if (poolErgDelta < -1_000_000L) {
-                        recvParts.add("${String.format("%.4f", Math.abs(poolErgDelta).toDouble() / 1e9)} ERG")
-                    }
-                    // Pool lost tokens = user received tokens
-                    if (tokenId.isNotEmpty() && poolTokenDelta < 0) {
-                        val name = getTokenName(tokenId)
-                        if (name != tokenId) {
-                            recvParts.add("${formatBalance(tokenId, Math.abs(poolTokenDelta))} $name")
-                        }
-                    }
-                } else if (lpDelta < 0) {
-                    // ── LP Deposit: user sends ERG + tokens, receives LP tokens ──
-                    effectiveLabel = "DEX LP Deposit"
-                    // Pool gained ERG = user sent ERG
-                    if (poolErgDelta > 2_000_000L) {
-                        sentParts.add("${String.format("%.4f", poolErgDelta.toDouble() / 1e9)} ERG")
-                    }
-                    // Pool gained tokens = user sent tokens
-                    if (tokenId.isNotEmpty() && poolTokenDelta > 0) {
-                        val name = getTokenName(tokenId)
-                        if (name != tokenId) {
-                            sentParts.add("${formatBalance(tokenId, poolTokenDelta)} $name")
-                        }
-                    }
-                    // LP tokens left pool = user received LP
-                    val lpTokenId = pInAssets.getOrNull(1)?.get("tokenId") as? String ?: ""
-                    if (lpTokenId.isNotEmpty()) {
-                        val lpName = getTokenName(lpTokenId)
-                        val lpFormatted = formatBalance(lpTokenId, Math.abs(lpDelta))
-                        recvParts.add("$lpFormatted $lpName")
-                    }
-                } else {
-                    // ── Normal proxy swap (LP unchanged) ──
-                    // User sent what pool gained, received what pool lost
-                    if (poolErgDelta > 2_000_000L) {
-                        sentParts.add("${String.format("%.4f", poolErgDelta.toDouble() / 1e9)} ERG")
-                    } else if (poolErgDelta < -1_000_000L) {
-                        recvParts.add("${String.format("%.4f", Math.abs(poolErgDelta).toDouble() / 1e9)} ERG")
-                    }
-                    if (tokenId.isNotEmpty() && poolTokenDelta != 0L) {
-                        val name = getTokenName(tokenId)
-                        if (!name.startsWith("Pool") && name != tokenId) {
-                            val formatted = formatBalance(tokenId, Math.abs(poolTokenDelta))
-                            if (poolTokenDelta > 0) sentParts.add("$formatted $name")
-                            else recvParts.add("$formatted $name")
-                        }
-                    }
-                }
-            }
-        } else {
-            // Direct swap: compute from trader's address deltas (original logic)
-            val traderInputErg = rawInputs.filter { (it["address"] as? String ?: "").startsWith(traderAddr.take(30)) }
-                .sumOf { (it["value"] as? Number)?.toLong() ?: 0L }
-            val traderInputTokens = mutableMapOf<String, Long>()
-            for (inp in rawInputs) {
-                if (!((inp["address"] as? String ?: "").startsWith(traderAddr.take(30)))) continue
-                for (a in (inp["assets"] as? List<Map<String, Any>> ?: emptyList())) {
-                    val tid = a["tokenId"] as? String ?: continue
-                    val amt = (a["amount"] as? Number)?.toLong() ?: 0L
-                    traderInputTokens[tid] = (traderInputTokens[tid] ?: 0L) + amt
-                }
-            }
-
-            val traderOutputErg = rawOutputs.filter { (it["address"] as? String ?: "").startsWith(traderAddr.take(30)) }
-                .sumOf { (it["value"] as? Number)?.toLong() ?: 0L }
-            val traderOutputTokens = mutableMapOf<String, Long>()
-            for (outp in rawOutputs) {
-                if (!((outp["address"] as? String ?: "").startsWith(traderAddr.take(30)))) continue
-                for (a in (outp["assets"] as? List<Map<String, Any>> ?: emptyList())) {
-                    val tid = a["tokenId"] as? String ?: continue
-                    val amt = (a["amount"] as? Number)?.toLong() ?: 0L
-                    traderOutputTokens[tid] = (traderOutputTokens[tid] ?: 0L) + amt
-                }
-            }
-
-            val ergDiff = traderOutputErg - traderInputErg
-            if (ergDiff < -2_000_000L) {
-                sentParts.add("${String.format("%.4f", Math.abs(ergDiff).toDouble() / 1e9)} ERG")
-            } else if (ergDiff > 1_000_000L) {
-                recvParts.add("${String.format("%.4f", ergDiff.toDouble() / 1e9)} ERG")
-            }
-
-            // For bank/mint transactions, only show stablecoin deltas (not change/NFT tokens)
-            val isBankTx = effectiveLabel.contains("Bank") || effectiveLabel.contains("Freemint") || 
-                            effectiveLabel.contains("Arbmint")
-            val stablecoinTokenIds = if (isBankTx) setOf(
-                com.piggytrade.piggytrade.stablecoin.use.UseConfig.USE_TOKEN_ID,
-                com.piggytrade.piggytrade.stablecoin.dexygold.DexyGoldConfig.DEXY_TOKEN_ID,
-                com.piggytrade.piggytrade.stablecoin.sigmausd.SigmaUsdConfig.SIGUSD_TOKEN_ID,
-                com.piggytrade.piggytrade.stablecoin.sigmausd.SigmaUsdConfig.SIGRSV_TOKEN_ID
-            ) else null
-
-            val allTokenIds = traderInputTokens.keys + traderOutputTokens.keys
-            for (tid in allTokenIds) {
-                val diff = (traderOutputTokens[tid] ?: 0L) - (traderInputTokens[tid] ?: 0L)
-                if (diff == 0L) continue
-                if (stablecoinTokenIds != null && tid !in stablecoinTokenIds) continue
-                val name = getTokenName(tid)
-                if (name.startsWith("Pool") || name == tid) continue
-                val formatted = formatBalance(tid, Math.abs(diff))
-                if (diff < 0) sentParts.add("$formatted $name")
-                else recvParts.add("$formatted $name")
-            }
-        }
-
-        if (sentParts.isEmpty() && recvParts.isEmpty()) return null
-
-        // Price impact for DEX swaps (not LP Withdraw/Deposit)
-        var priceImpact: Double? = null
-        val isSwap = (effectiveLabel.contains("DEX") || effectiveLabel.contains("LP Swap"))
-            && !effectiveLabel.contains("Withdraw") && !effectiveLabel.contains("Deposit")
-        if (isSwap) {
-            // For LP Swap, the pool box is at the pool_address, not the lp_swap_address
-            val poolAddr = when {
-                effectiveLabel.contains("USE") -> NetworkConfig.USE_CONFIG["pool_address"] as? String ?: protocolAddress
-                effectiveLabel.contains("DexyGold") -> NetworkConfig.DEXYGOLD_CONFIG["pool_address"] as? String ?: protocolAddress
-                else -> protocolAddress
-            }
-            priceImpact = calculatePriceImpact(rawInputs, rawOutputs, poolAddr)
-        }
-
-        return EcosystemTx(
-            txId = txId,
-            protocol = effectiveLabel,
-            timestamp = timestamp,
-            traderAddress = traderAddr,
-            sent = sentParts.joinToString(" + ").ifEmpty { "—" },
-            received = recvParts.joinToString(" + ").ifEmpty { "—" },
-            priceImpact = priceImpact,
-            isConfirmed = isConfirmed
-        )
-    }
-
-    /**
-     * Calculate price impact by comparing pool reserves before and after the swap.
-     * Pool box is identified as the box at the protocol address with 3+ assets (ERG pools).
-     */
-    @Suppress("UNCHECKED_CAST")
-    private fun calculatePriceImpact(
-        inputs: List<Map<String, Any>>,
-        outputs: List<Map<String, Any>>,
-        protocolAddress: String
-    ): Double? {
-        try {
-            // Find pool box in inputs (before swap)
-            val poolInput = inputs.find { box ->
-                val addr = box["address"] as? String ?: ""
-                val assets = box["assets"] as? List<Map<String, Any>> ?: emptyList()
-                addr.startsWith(protocolAddress.take(30)) && assets.size >= 3
-            } ?: return null
-
-            // Find pool box in outputs (after swap)
-            val poolOutput = outputs.find { box ->
-                val addr = box["address"] as? String ?: ""
-                val assets = box["assets"] as? List<Map<String, Any>> ?: emptyList()
-                addr.startsWith(protocolAddress.take(30)) && assets.size >= 3
-            } ?: return null
-
-            val ergBefore = (poolInput["value"] as? Number)?.toLong() ?: return null
-            val ergAfter = (poolOutput["value"] as? Number)?.toLong() ?: return null
-
-            val assetsBefore = poolInput["assets"] as? List<Map<String, Any>> ?: return null
-            val assetsAfter = poolOutput["assets"] as? List<Map<String, Any>> ?: return null
-            if (assetsBefore.size < 3 || assetsAfter.size < 3) return null
-
-            val tokenBefore = (assetsBefore[2]["amount"] as? Number)?.toLong() ?: return null
-            val tokenAfter = (assetsAfter[2]["amount"] as? Number)?.toLong() ?: return null
-
-            if (tokenBefore <= 0 || tokenAfter <= 0) return null
-
-            // Price = ERG per token
-            val priceBefore = ergBefore.toDouble() / tokenBefore.toDouble()
-            val priceAfter = ergAfter.toDouble() / tokenAfter.toDouble()
-
-            if (priceBefore <= 0) return null
-            return ((priceAfter - priceBefore) / priceBefore) * 100.0
-        } catch (_: Exception) {
-            return null
-        }
-    }
 }
+

@@ -3,6 +3,7 @@ import com.piggytrade.piggytrade.ui.theme.*
 import com.piggytrade.piggytrade.ui.common.*
 import com.piggytrade.piggytrade.ui.home.*
 import com.piggytrade.piggytrade.ui.swap.*
+import com.piggytrade.piggytrade.ui.market.MarketViewModel
 import com.piggytrade.piggytrade.ui.wallet.*
 
 import androidx.compose.foundation.Image
@@ -38,7 +39,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 
 @Composable
 fun SettingsScreen(
-    viewModel: SwapViewModel, 
+    viewModel: SwapViewModel,
+    marketViewModel: MarketViewModel,
     onBack: () -> Unit, 
     onNavigateToAddNode: () -> Unit,
     onNavigateToManagePairs: () -> Unit
@@ -778,7 +780,7 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showClearOracleConfirm = false
-                    viewModel.clearAndResync()
+                    marketViewModel.clearAndResync()
                 }) {
                     Text("CLEAR DATA", color = ColorSent, fontWeight = FontWeight.Bold)
                 }

@@ -262,12 +262,12 @@ private fun handleScannedContent(
         trimmed.startsWith("ergopay:", ignoreCase = true) -> {
             onErgoPayScanned(trimmed)
         }
-        // Ergo mainnet address (starts with 9, typically 51 chars)
-        trimmed.startsWith("9") && trimmed.length >= 40 && trimmed.length <= 60 -> {
+        // Ergo mainnet address (starts with 9, no fixed max length)
+        trimmed.startsWith("9") && trimmed.length >= 40 -> {
             onAddressScanned(trimmed)
         }
-        // Ergo testnet address (starts with 3)
-        trimmed.startsWith("3") && trimmed.length >= 40 && trimmed.length <= 60 -> {
+        // Ergo testnet/P2S address (starts with 3, no fixed max length)
+        trimmed.startsWith("3") && trimmed.length >= 40 -> {
             onAddressScanned(trimmed)
         }
         // URL that might contain ErgoPay
@@ -276,7 +276,7 @@ private fun handleScannedContent(
             onErgoPayScanned(trimmed)
         }
         // Fallback: treat as address if it looks plausible
-        trimmed.length in 40..60 && trimmed.all { it.isLetterOrDigit() } -> {
+        trimmed.length >= 40 && trimmed.all { it.isLetterOrDigit() } -> {
             onAddressScanned(trimmed)
         }
         else -> {

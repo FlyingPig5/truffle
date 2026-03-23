@@ -22,13 +22,10 @@ import androidx.compose.ui.unit.sp
 import com.piggytrade.piggytrade.R
 
 @Composable
-fun WalletSelectorRow(
-    uiState: SwapState,
-    viewModel: SwapViewModel,
-    onNavigateToAddWallet: () -> Unit,
+fun AppHeader(
+    isLoading: Boolean,
     onNavigateToSettings: () -> Unit
 ) {
-    // TOP: App header — outside the wallet card, on main background
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -54,7 +51,7 @@ fun WalletSelectorRow(
         
         // Right: Loading + Settings
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (uiState.isLoadingQuote || uiState.isLoadingHistory) {
+            if (isLoading) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(16.dp),
                     color = ColorAccent,
@@ -72,7 +69,14 @@ fun WalletSelectorRow(
             )
         }
     }
+}
 
+@Composable
+fun WalletSelectorCard(
+    uiState: SwapState,
+    viewModel: SwapViewModel,
+    onNavigateToAddWallet: () -> Unit
+) {
     // Wallet selector card — standalone
     WalletCard {
         Row(
@@ -86,12 +90,12 @@ fun WalletSelectorRow(
             var expanded by remember { mutableStateOf(false) }
             var menuWidth by remember { mutableStateOf(0.dp) }
             val density = LocalDensity.current
-            
+
             Row(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .onSizeChanged { 
+                    .onSizeChanged {
                         menuWidth = with(density) { it.width.toDp() }
                     }
                     .clickable { expanded = true }
@@ -135,7 +139,7 @@ fun WalletSelectorRow(
                     } else {
                         uiState.selectedAddress
                     }
-                    
+
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = walletName.replace(" (Ergopay)", ""),
@@ -184,5 +188,24 @@ fun WalletSelectorRow(
                 )
             }
         }
+    }
+}
+
+@Composable
+fun WalletSelectorRow(
+    uiState: SwapState,
+    viewModel: SwapViewModel,
+    onNavigateToAddWallet: () -> Unit,
+    onNavigateToSettings: () -> Unit,
+    showWalletSelector: Boolean = true
+) {
+    // TOP: App header — outside the wallet card, on main background
+    AppHeader(
+        isLoading = uiState.isLoadingQuote || uiState.isLoadingHistory,
+        onNavigateToSettings = onNavigateToSettings
+    )
+
+    if (showWalletSelector) {
+        WalletSelectorCard(uiState, viewModel, onNavigateToAddWallet)
     }
 }

@@ -6,6 +6,7 @@ import com.piggytrade.piggytrade.ui.wallet.*
 import com.piggytrade.piggytrade.ui.settings.*
 import com.piggytrade.piggytrade.ui.bank.*
 import com.piggytrade.piggytrade.ui.portfolio.*
+import com.piggytrade.piggytrade.ui.market.MarketViewModel
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 
@@ -29,6 +30,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun MainScreen(
     viewModel: SwapViewModel,
+    marketViewModel: MarketViewModel,
     onNavigateToSettings: () -> Unit,
     onNavigateToTokenSelector: (String) -> Unit,
     onNavigateToWalletSelector: () -> Unit,
@@ -46,7 +48,7 @@ fun MainScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                viewModel.syncOraclePrices()
+                marketViewModel.syncOraclePrices()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -106,14 +108,15 @@ fun MainScreen(
                     }
                     .blur(if (uiState.activeSelector != null) 10.dp else 0.dp)
             ) {
-                // Header with Wallet Selector, Logo, and Settings (hidden on ecosystem tab)
-                if (uiState.activeTab != "ecosystem" && uiState.activeTab != "explorer") {
-                    WalletSelectorRow(uiState, viewModel, onNavigateToAddWallet, onNavigateToSettings)
-                }
+                // Constant App Header (Logo + Settings Cog)
+                AppHeader(
+                    isLoading = uiState.isLoadingQuote || uiState.isLoadingHistory,
+                    onNavigateToSettings = onNavigateToSettings
+                )
 
-                Spacer(modifier = Modifier.height(4.dp)) // Minimal middle gap
+                Spacer(modifier = Modifier.height(4.dp))
 
-                // Tab Content
+                // Tab Content with Animated Transitions
                 AnimatedContent(
                     targetState = uiState.activeTab,
                     transitionSpec = {
@@ -133,73 +136,83 @@ fun MainScreen(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     label = "TabTransition"
                 ) { tab ->
-                    when (tab) {
-                        "dex" -> TradeCard(modifier = Modifier.fillMaxSize()) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Column {
-                                    // FROM section
-                                    FromTokenPanel(uiState, viewModel)
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // Wallet selector card — visible only on functional tabs
+                        if (tab != "ecosystem" && tab != "explorer") {
+                            WalletSelectorCard(uiState, viewModel, onNavigateToAddWallet)
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
 
-                                    Spacer(modifier = Modifier.height(8.dp)) // Small gap for the overlay button
+                        // Screen specific content
+                        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                            when (tab) {
+                                "dex" -> TradeCard(modifier = Modifier.fillMaxSize()) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Column {
+                                            // FROM section
+                                            FromTokenPanel(uiState, viewModel)
 
-                                    // TO section
-                                    ToTokenPanel(uiState, viewModel)
+                                            Spacer(modifier = Modifier.height(8.dp)) // Small gap for the overlay button
+
+                                            // TO section
+                                            ToTokenPanel(uiState, viewModel)
+                                        }
+
+                                        // SWAP BUTTON OVERLAY
+                                        TogaIconButton(
+                                            icon = "\uE8D5", // Material swap_vert
+                                            onClick = { viewModel.swapDirection() },
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .offset(y = if (uiState.showFavorites) 24.dp else 0.dp),
+                                            iconSize = 24.dp,
+                                            iconColor = Color.White,
+                                            radius = 20.dp,
+                                            borderWidth = 0.dp,
+                                            bgColor = ColorCard
+                                        )
+                                    }
+
+                                    // Status Box - Expanded Quote Details
+                                    OrderDetailsPanel(uiState, viewModel)
+
+                                    Spacer(modifier = Modifier.weight(1f)) // Push button to bottom of card
+
+                                    // Swap Button
+                                    SwapButton(uiState, isSwapValid, fromAmountValue, fromBalanceValue, { showBetaDisclaimer = true })
                                 }
-
-                                // SWAP BUTTON OVERLAY
-                                TogaIconButton(
-                                    icon = "\uE8D5", // Material swap_vert
-                                    onClick = { viewModel.swapDirection() },
-                                    modifier = Modifier
-                                        .size(40.dp)
-                                        .offset(y = if (uiState.showFavorites) 24.dp else 0.dp),
-                                    iconSize = 24.dp,
-                                    iconColor = Color.White,
-                                    radius = 20.dp,
-                                    borderWidth = 0.dp,
-                                    bgColor = ColorCard
-                                )
+                                "bank" -> TradeCard(modifier = Modifier.fillMaxSize()) {
+                                     BankScreen(
+                                         uiState = uiState,
+                                         viewModel = viewModel,
+                                         onSubmit = { showBetaDisclaimer = true }
+                                     )
+                                }
+                                "ecosystem" -> Box(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp)) {
+                                    EcosystemScreen(viewModel = viewModel, marketViewModel = marketViewModel, onNavigateToAddressExplorer = onNavigateToAddressExplorer)
+                                }
+                                "explorer" -> Box(modifier = Modifier.fillMaxSize().padding(horizontal = 0.dp)) {
+                                    AddressExplorerScreen(
+                                        viewModel = viewModel,
+                                        onBack = { viewModel.setActiveTab("wallet") },
+                                        onNavigateToQrScanner = onNavigateToQrScannerExplorer,
+                                        onNavigateToAddressExplorer = onNavigateToAddressExplorer
+                                    )
+                                }
+                                else -> Box(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp)) {
+                                    WalletInfoContent(
+                                        walletName = uiState.selectedWallet,
+                                        viewModel = viewModel,
+                                        marketViewModel = marketViewModel,
+                                        onDeleteComplete = null,
+                                        showTitle = true,
+                                        onNavigateToAddWallet = onNavigateToAddWallet,
+                                        onNavigateToSend = onNavigateToSend,
+                                        onNavigateToQrScanner = onNavigateToQrScannerExplorer,
+                                        onAddressClick = onNavigateToAddressExplorer
+                                    )
+                                }
                             }
-
-                            // Status Box - Expanded Quote Details
-                            OrderDetailsPanel(uiState, viewModel)
-
-
-
-
-                            Spacer(modifier = Modifier.weight(1f)) // Push button to bottom of card
-
-                            // Swap Button
-                            SwapButton(uiState, isSwapValid, fromAmountValue, fromBalanceValue, { showBetaDisclaimer = true })
-                        }
-                        "bank" -> TradeCard(modifier = Modifier.fillMaxSize()) {
-                             BankScreen(
-                                 uiState = uiState,
-                                 viewModel = viewModel,
-                                 onSubmit = { showBetaDisclaimer = true }
-                             )
-                        }
-                        "ecosystem" -> Box(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp)) {
-                            EcosystemScreen(viewModel = viewModel, onNavigateToAddressExplorer = onNavigateToAddressExplorer)
-                        }
-                        "explorer" -> Box(modifier = Modifier.fillMaxSize().padding(horizontal = 0.dp)) {
-                            AddressExplorerScreen(
-                                viewModel = viewModel,
-                                onBack = { viewModel.setActiveTab("wallet") },
-                                onNavigateToQrScanner = onNavigateToQrScannerExplorer,
-                                onNavigateToAddressExplorer = onNavigateToAddressExplorer
-                            )
-                        }
-                        else -> Box(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp)) {
-                            WalletInfoContent(
-                                walletName = uiState.selectedWallet,
-                                viewModel = viewModel,
-                                onDeleteComplete = null,
-                                showTitle = true,
-                                onNavigateToAddWallet = onNavigateToAddWallet,
-                                onNavigateToSend = onNavigateToSend,
-                                onAddressClick = onNavigateToAddressExplorer
-                            )
                         }
                     }
                 }

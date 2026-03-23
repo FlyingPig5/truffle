@@ -149,7 +149,7 @@ private fun TxDetailBoxCard(
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                "Σ ${String.format("%.6f", box.valueNano / 1_000_000_000.0)} ERG",
+                "Σ ${String.format("%.9f", box.valueNano / 1_000_000_000.0).trimEnd('0').trimEnd('.')} ERG",
                 color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold
             )
             box.tokens.forEach { tok ->

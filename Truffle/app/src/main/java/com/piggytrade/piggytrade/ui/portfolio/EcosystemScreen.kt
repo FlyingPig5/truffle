@@ -2,6 +2,7 @@ package com.piggytrade.piggytrade.ui.portfolio
 
 import com.piggytrade.piggytrade.ui.theme.*
 import com.piggytrade.piggytrade.ui.swap.SwapViewModel
+import com.piggytrade.piggytrade.ui.market.MarketViewModel
 import com.piggytrade.piggytrade.ui.swap.EcosystemTx
 import com.piggytrade.piggytrade.ui.home.MarketSyncButton
 import com.piggytrade.piggytrade.ui.home.MarketSyncDialog
@@ -63,24 +64,25 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun EcosystemScreen(viewModel: SwapViewModel) {
+fun EcosystemScreen(viewModel: SwapViewModel, marketViewModel: MarketViewModel, onNavigateToAddressExplorer: (String) -> Unit = {}) {
     val uiState by viewModel.uiState.collectAsState()
+    val marketState by marketViewModel.uiState.collectAsState()
 
     LaunchedEffect(Unit) {
-        viewModel.fetchEcosystemData()
+        marketViewModel.fetchEcosystemData()
     }
 
     var filter by remember { mutableStateOf("dex") }
 
-    val selectedChartToken = uiState.selectedChartToken
+    val selectedChartToken = marketState.selectedChartToken
 
     // Auto-switch to "trades" tab when a new token is selected from the chart
     LaunchedEffect(selectedChartToken) {
         filter = if (selectedChartToken != null) "trades" else "dex"
     }
 
-    val filteredActivity = remember(uiState.ecosystemActivity, filter) {
-        uiState.ecosystemActivity.filter { tx ->
+    val filteredActivity = remember(marketState.ecosystemActivity, filter) {
+        marketState.ecosystemActivity.filter { tx ->
             val l = tx.protocol.lowercase()
             when (filter) {
                 "dex" -> l.contains("dex") || l.contains("lp swap")
@@ -99,13 +101,13 @@ fun EcosystemScreen(viewModel: SwapViewModel) {
     if (pullRefreshState.isRefreshing && !isManualRefreshing) {
         isManualRefreshing = true
         LaunchedEffect(true) {
-            viewModel.fetchEcosystemData(forceRefresh = true)
+            marketViewModel.fetchEcosystemData(forceRefresh = true)
         }
     }
 
     // Stop the indicator only when a manual refresh finishes
-    LaunchedEffect(uiState.isLoadingEcosystem) {
-        if (!uiState.isLoadingEcosystem && isManualRefreshing) {
+    LaunchedEffect(marketState.isLoadingEcosystem) {
+        if (!marketState.isLoadingEcosystem && isManualRefreshing) {
             isManualRefreshing = false
             pullRefreshState.endRefresh()
         }
@@ -120,7 +122,7 @@ fun EcosystemScreen(viewModel: SwapViewModel) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("Ecosystem Activity", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                if (uiState.isLoadingEcosystem) {
+                if (marketState.isLoadingEcosystem) {
                     CircularProgressIndicator(color = ColorAccent, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                 } else {
                     Text(
@@ -129,7 +131,7 @@ fun EcosystemScreen(viewModel: SwapViewModel) {
                         modifier = Modifier.clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            onClick = { viewModel.fetchEcosystemData(forceRefresh = true) }
+                            onClick = { marketViewModel.fetchEcosystemData(forceRefresh = true) }
                         )
                     )
                 }
@@ -143,10 +145,10 @@ fun EcosystemScreen(viewModel: SwapViewModel) {
                 modifier = Modifier.fillMaxWidth()
             ) { page ->
                 when (page) {
-                    0 -> ErgPriceChartCard(uiState, viewModel)
+                    0 -> ErgPriceChartCard(marketState, marketViewModel)
                     1 -> {
-                        if (uiState.ecosystemTvl.isNotEmpty()) {
-                            TvlSection(uiState.ecosystemTvl, uiState.ergPriceUsd)
+                        if (marketState.ecosystemTvl.isNotEmpty()) {
+                            TvlSection(marketState.ecosystemTvl, marketState.ergPriceUsd)
                         } else {
                             Box(
                                 modifier = Modifier.fillMaxWidth().height(100.dp),
@@ -182,14 +184,14 @@ fun EcosystemScreen(viewModel: SwapViewModel) {
             val store = viewModel.oraclePriceStore
 
             MarketSyncButton(
-                viewModel = viewModel,
+                viewModel = marketViewModel,
                 onClick = { showSyncDialog = true }
             )
 
             if (showSyncDialog) {
                 MarketSyncDialog(
-                    viewModel = viewModel,
-                    isFirstSync = uiState.lastMarketSyncMs == 0L && uiState.marketSyncIncomplete,
+                    viewModel = marketViewModel,
+                    isFirstSync = marketState.lastMarketSyncMs == 0L && marketState.marketSyncIncomplete,
                     onDismiss = { showSyncDialog = false }
                 )
             }
@@ -236,8 +238,8 @@ fun EcosystemScreen(viewModel: SwapViewModel) {
             // Activity feed OR Latest Trades depending on filter
             if (filter == "trades" && selectedChartToken != null) {
                 // ── Latest pool trades for selected token ──────────────────
-                val poolTrades = uiState.poolTrades
-                val isLoadingTrades = uiState.isLoadingPoolTrades
+                val poolTrades = marketState.poolTrades
+                val isLoadingTrades = marketState.isLoadingPoolTrades
                 if (isLoadingTrades && poolTrades.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -277,12 +279,167 @@ fun EcosystemScreen(viewModel: SwapViewModel) {
                                 trade.tokenAmount >= 1 -> String.format("%.3f", trade.tokenAmount)
                                 else -> String.format("%.6f", trade.tokenAmount)
                             }
-                            val uriHandler = LocalUriHandler.current
+                            val ageMs = System.currentTimeMillis() - trade.timestamp
+                            val ageStr = when {
+                                trade.timestamp <= 0L -> ""
+                                ageMs < 60_000 -> "just now"
+                                ageMs < 3_600_000 -> "${ageMs / 60_000}m ago"
+                                ageMs < 86_400_000 -> "${ageMs / 3_600_000}h ago"
+                                else -> "${ageMs / 86_400_000}d ago"
+                            }
+
+                            var showDetail by remember { mutableStateOf(false) }
+
+                            // ── Detail dialog ────────────────────────────────
+                            if (showDetail) {
+                                val uriHandler = LocalUriHandler.current
+                                AlertDialog(
+                                    onDismissRequest = { showDetail = false },
+                                    containerColor = ColorCard,
+                                    title = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .background(color.copy(alpha = 0.18f), RoundedCornerShape(4.dp))
+                                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                                            ) {
+                                                Text(label, color = color, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Text(
+                                                "$selectedChartToken / ERG",
+                                                color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    },
+                                    text = {
+                                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                            // Amounts
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text("Sent", color = ColorTextDim, fontSize = 11.sp)
+                                                    Text(
+                                                        if (isBuy) "$ergFmt ERG" else "$tokenFmt $selectedChartToken",
+                                                        color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                                Text(" ➜ ", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text("Received", color = ColorTextDim, fontSize = 11.sp)
+                                                    Text(
+                                                        if (isBuy) "$tokenFmt $selectedChartToken" else "$ergFmt ERG",
+                                                        color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                            }
+
+                                            // Trader address
+                                            if (trade.traderAddress.isNotEmpty()) {
+                                                var showExplore by remember { mutableStateOf(false) }
+                                                Text("Trader", color = ColorTextDim, fontSize = 11.sp)
+                                                Text(
+                                                    trade.traderAddress,
+                                                    color = ColorAccent, fontSize = 12.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    lineHeight = 16.sp,
+                                                    modifier = Modifier.clickable { showExplore = true }
+                                                )
+                                                if (showExplore) {
+                                                    AlertDialog(
+                                                        onDismissRequest = { showExplore = false },
+                                                        containerColor = ColorCard,
+                                                        title = { Text("Explore Wallet", color = Color.White, fontWeight = FontWeight.Bold) },
+                                                        text = {
+                                                            Column {
+                                                                Text("View balance & transactions for:", color = ColorTextDim, fontSize = 13.sp)
+                                                                Spacer(Modifier.height(6.dp))
+                                                                val truncAddr = if (trade.traderAddress.length > 20)
+                                                                    "${trade.traderAddress.take(10)}…${trade.traderAddress.takeLast(8)}"
+                                                                else trade.traderAddress
+                                                                Text(truncAddr, color = ColorAccent, fontSize = 13.sp,
+                                                                    fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                                                            }
+                                                        },
+                                                        confirmButton = {
+                                                            TextButton(onClick = {
+                                                                showExplore = false
+                                                                showDetail = false
+                                                                onNavigateToAddressExplorer(trade.traderAddress)
+                                                            }) { Text("Explore", color = ColorAccent, fontWeight = FontWeight.Bold) }
+                                                        },
+                                                        dismissButton = {
+                                                            TextButton(onClick = { showExplore = false }) {
+                                                                Text("Cancel", color = ColorTextDim)
+                                                            }
+                                                        }
+                                                    )
+                                                }
+                                            }
+
+                                            // Date/time
+                                            if (trade.timestamp > 0L) {
+                                                Text("Date", color = ColorTextDim, fontSize = 11.sp)
+                                                val sdf = java.text.SimpleDateFormat("d MMM yyyy HH:mm", java.util.Locale.US)
+                                                Text(
+                                                    "$ageStr · ${sdf.format(java.util.Date(trade.timestamp))}",
+                                                    color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp
+                                                )
+                                            }
+
+                                            // TX ID
+                                            if (trade.txId.isNotEmpty()) {
+                                                Text("Transaction ID", color = ColorTextDim, fontSize = 11.sp)
+                                                Text(
+                                                    trade.txId,
+                                                    color = Color.White.copy(alpha = 0.6f),
+                                                    fontSize = 10.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    lineHeight = 14.sp
+                                                )
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Text("Open in", color = ColorTextDim, fontSize = 10.sp)
+                                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                    listOf(
+                                                        "Ergo Explorer" to "https://explorer.ergoplatform.com/en/transactions/${trade.txId}",
+                                                        "ErgExplorer"   to "https://ergexplorer.com/transactions#${trade.txId}",
+                                                        "Sigmaspace"    to "https://sigmaspace.io/en/transaction/${trade.txId}"
+                                                    ).forEach { (name, url) ->
+                                                        Surface(
+                                                            shape = RoundedCornerShape(6.dp),
+                                                            color = ColorInputBg,
+                                                            modifier = Modifier.clickable {
+                                                                uriHandler.openUri(url)
+                                                                showDetail = false
+                                                            }
+                                                        ) {
+                                                            Text(
+                                                                text = name,
+                                                                color = ColorAccent,
+                                                                fontSize = 10.sp,
+                                                                fontWeight = FontWeight.SemiBold,
+                                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = { showDetail = false }) {
+                                            Text("Close", color = ColorTextDim)
+                                        }
+                                    }
+                                )
+                            }
+
+                            // ── Row card ─────────────────────────────────────
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(ColorInputBg)
+                                    .clickable { showDetail = true }
                                     .padding(horizontal = 10.dp, vertical = 7.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -303,32 +460,27 @@ fun EcosystemScreen(viewModel: SwapViewModel) {
                                     if (trade.traderAddress.isNotEmpty()) {
                                         Text(
                                             trade.traderAddress.take(10) + "…",
-                                            color = ColorTextDim, fontSize = 10.sp
+                                            color = ColorAccent, fontSize = 10.sp
                                         )
                                     }
-                                }
-                                val ageMs = System.currentTimeMillis() - trade.timestamp
-                                val ageStr = when {
-                                    trade.timestamp <= 0L -> ""
-                                    ageMs < 60_000 -> "just now"
-                                    ageMs < 3_600_000 -> "${ageMs / 60_000}m ago"
-                                    ageMs < 86_400_000 -> "${ageMs / 3_600_000}h ago"
-                                    else -> "${ageMs / 86_400_000}d ago"
+                                    // Price impact badge
+                                    trade.priceImpact?.let { impact ->
+                                        val impactText = String.format("%+.2f%%", impact)
+                                        val impactColor = if (impact >= 0) Color(0xFF4CAF50) else Color(0xFFFF5252)
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("Impact ", color = Color.White.copy(alpha = 0.45f), fontSize = 10.sp)
+                                            Box(
+                                                modifier = Modifier
+                                                    .background(impactColor.copy(alpha = 0.15f), RoundedCornerShape(3.dp))
+                                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                                            ) {
+                                                Text(impactText, color = impactColor, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                        }
+                                    }
                                 }
                                 if (ageStr.isNotEmpty()) {
                                     Text(ageStr, color = ColorTextDim, fontSize = 10.sp)
-                                }
-                                if (trade.txId.isNotEmpty()) {
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Icon(
-                                        imageVector = Icons.Rounded.OpenInNew,
-                                        contentDescription = "Explorer",
-                                        tint = ColorBlue,
-                                        modifier = Modifier.size(14.dp).clickable(
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            indication = null
-                                        ) { uriHandler.openUri("https://explorer.ergoplatform.com/en/transactions/${trade.txId}") }
-                                    )
                                 }
                             }
                         }
@@ -336,7 +488,7 @@ fun EcosystemScreen(viewModel: SwapViewModel) {
                 }
             } else if (filter == "market") {
                 // ── All Tokens Market View ──────────────────────────────────
-                val marketData = uiState.tokenMarketData.ifEmpty { viewModel.oraclePriceStore.allTokenMarketData }
+                val marketData = marketState.tokenMarketData.ifEmpty { viewModel.oraclePriceStore.allTokenMarketData }
                 var sortBy by remember { mutableStateOf("vol7d") } // vol24h, vol7d, change24h, change7d, price
                 var sortAsc by remember { mutableStateOf(false) }
 
@@ -526,7 +678,7 @@ fun EcosystemScreen(viewModel: SwapViewModel) {
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(ColorInputBg)
-                                    .clickable { viewModel.selectChartToken(token.name) }
+                                    .clickable { marketViewModel.selectChartToken(token.name) }
                                     .padding(horizontal = 10.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -576,7 +728,7 @@ fun EcosystemScreen(viewModel: SwapViewModel) {
                         }
                     }
                 }
-            } else if (uiState.isLoadingEcosystem && uiState.ecosystemActivity.isEmpty()) {
+            } else if (marketState.isLoadingEcosystem && marketState.ecosystemActivity.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator(color = ColorAccent, modifier = Modifier.size(32.dp))
@@ -598,15 +750,15 @@ fun EcosystemScreen(viewModel: SwapViewModel) {
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     items(filteredActivity) { tx ->
-                        EcosystemTxRow(tx = tx)
+                        EcosystemTxRow(tx = tx, onAddressClick = onNavigateToAddressExplorer)
                     }
                     item {
                         // Only try to load more if we have enough items and are not already loading
-                        if (!uiState.isLoadingEcosystem && filteredActivity.size >= 10) {
+                        if (!marketState.isLoadingEcosystem && filteredActivity.size >= 10) {
                             LaunchedEffect(filteredActivity.size) {
-                                viewModel.fetchMoreEcosystemActivity()
+                                marketViewModel.fetchMoreEcosystemActivity()
                             }
-                        } else if (uiState.isLoadingEcosystem && !isManualRefreshing) {
+                        } else if (marketState.isLoadingEcosystem && !isManualRefreshing) {
                             Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator(color = ColorAccent, modifier = Modifier.size(20.dp))
                             }
@@ -631,8 +783,8 @@ fun EcosystemScreen(viewModel: SwapViewModel) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ErgPriceChartCard(
-    uiState: com.piggytrade.piggytrade.ui.swap.SwapState,
-    viewModel: SwapViewModel
+    uiState: com.piggytrade.piggytrade.ui.market.MarketState,
+    viewModel: MarketViewModel
 ) {
     val context = LocalContext.current
     val range = uiState.chartRange
@@ -648,7 +800,7 @@ private fun ErgPriceChartCard(
 
     // Dropdown state
     var dropdownExpanded by remember { mutableStateOf(false) }
-    val tokensWithPools = remember { viewModel.getTokensWithPools() }
+    val tokensWithPools by androidx.compose.runtime.derivedStateOf { viewModel.getTokensWithPools() }
     var searchQuery by remember { mutableStateOf("") }
 
     // Chart favorites persistence
@@ -1507,7 +1659,7 @@ private fun TvlProtocolCell(name: String, erg: Double, ergPriceUsd: Double?, mod
 // ─── Activity Row ──────────────────────────────────────────────
 
 @Composable
-private fun EcosystemTxRow(tx: EcosystemTx) {
+private fun EcosystemTxRow(tx: EcosystemTx, onAddressClick: ((String) -> Unit)? = null) {
     val uriHandler = LocalUriHandler.current
     val icon = getEcoIcon(tx.protocol)
     val tagColor = getEcoTagColor(tx.protocol)
@@ -1516,6 +1668,7 @@ private fun EcosystemTxRow(tx: EcosystemTx) {
 
     // Detail + explorer dialog
     var showDetail by remember { mutableStateOf(false) }
+    var showExplorePopup by remember { mutableStateOf(false) }
 
     if (showDetail) {
         AlertDialog(
@@ -1536,14 +1689,15 @@ private fun EcosystemTxRow(tx: EcosystemTx) {
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Trader address — full, monospace
+                    // Trader address — clickable
                     Text("Trader", color = ColorTextDim, fontSize = 11.sp)
                     Text(
                         tx.traderAddress,
-                        color = Color.White,
+                        color = if (onAddressClick != null) ColorAccent else Color.White,
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
-                        lineHeight = 16.sp
+                        lineHeight = 16.sp,
+                        modifier = if (onAddressClick != null) Modifier.clickable { showExplorePopup = true } else Modifier
                     )
 
                     // Sent → Received
@@ -1589,30 +1743,30 @@ private fun EcosystemTxRow(tx: EcosystemTx) {
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // Explorer links
-                    Text("Open in Explorer", color = ColorTextDim, fontSize = 11.sp)
-                    listOf(
-                        "Ergo Explorer" to "https://explorer.ergoplatform.com/en/transactions/${tx.txId}",
-                        "ErgExplorer" to "https://ergexplorer.com/transactions#${tx.txId}",
-                        "Sigmaspace.io" to "https://sigmaspace.io/en/transaction/${tx.txId}"
-                    ).forEach { (name, url) ->
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = ColorInputBg,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
+                    // Explorer links — compact horizontal row
+                    Text("Open in", color = ColorTextDim, fontSize = 10.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(
+                            "Ergo Explorer" to "https://explorer.ergoplatform.com/en/transactions/${tx.txId}",
+                            "ErgExplorer"   to "https://ergexplorer.com/transactions#${tx.txId}",
+                            "Sigmaspace"    to "https://sigmaspace.io/en/transaction/${tx.txId}"
+                        ).forEach { (name, url) ->
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = ColorInputBg,
+                                modifier = Modifier.clickable {
                                     uriHandler.openUri(url)
                                     showDetail = false
                                 }
-                        ) {
-                            Text(
-                                text = name,
-                                color = ColorAccent,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                            )
+                            ) {
+                                Text(
+                                    text = name,
+                                    color = ColorAccent,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -1625,106 +1779,119 @@ private fun EcosystemTxRow(tx: EcosystemTx) {
         )
     }
 
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable { showDetail = true },
-        colors = CardDefaults.cardColors(containerColor = ColorInputBg),
-        shape = RoundedCornerShape(10.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Left column: icon + protocol label — vertically centered
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-                modifier = Modifier.width(58.dp).padding(horizontal = 4.dp)
-            ) {
-                Icon(imageVector = icon, contentDescription = null, tint = tagColor, modifier = Modifier.size(26.dp))
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = tx.protocol,
-                    color = tagColor,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 2,
-                    lineHeight = 8.sp,
-                    textAlign = TextAlign.Center
-                )
+    // Explore address popup
+    if (showExplorePopup && onAddressClick != null) {
+        AlertDialog(
+            onDismissRequest = { showExplorePopup = false },
+            containerColor = ColorCard,
+            title = { Text("Explore Wallet", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("View balance & transactions for:", color = ColorTextDim, fontSize = 13.sp)
+                    Spacer(Modifier.height(6.dp))
+                    val addr = tx.traderAddress
+                    Text(
+                        if (addr.length > 20) "${addr.take(10)}…${addr.takeLast(8)}" else addr,
+                        color = ColorAccent, fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showExplorePopup = false
+                    showDetail = false
+                    onAddressClick(tx.traderAddress)
+                }) {
+                    Text("Explore", color = ColorAccent, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExplorePopup = false }) {
+                    Text("Cancel", color = ColorTextDim)
+                }
             }
+        )
+    }
 
-            // Right: details
-            Column(modifier = Modifier.weight(1f)) {
-                // Row 1: address (left) + time/date (right)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        truncAddr,
-                        color = Color.White.copy(alpha = 0.85f),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Text(
-                        "${ecoTimeAgo(tx.timestamp)} · ${ecoDate(tx.timestamp)}",
-                        color = Color.White.copy(alpha = 0.45f),
-                        fontSize = 9.sp
-                    )
-                }
+    // Derive compact trade direction label
+    val tradeLabel = when {
+        tx.protocol.contains("LP Withdraw", ignoreCase = true) -> "LP Withdraw"
+        tx.protocol.contains("LP Deposit", ignoreCase = true)  -> "LP Deposit"
+        tx.protocol.contains("Freemint", ignoreCase = true)    -> "Freemint"
+        tx.protocol.contains("Arbmint", ignoreCase = true)     -> "Arbmint"
+        tx.protocol.contains("Buyback", ignoreCase = true)     -> "Buyback"
+        tx.sent.contains("ERG") && !tx.received.contains("ERG")  -> "Buy"
+        tx.received.contains("ERG") && !tx.sent.contains("ERG")  -> "Sell"
+        tx.sent == "—" || tx.received == "—"                     -> tx.protocol
+        else -> "Swap"
+    }
+    val tradeLabelColor = when (tradeLabel) {
+        "Buy"         -> Color(0xFF4CAF50)
+        "Sell"        -> Color(0xFFEF5350)
+        "LP Withdraw" -> Color(0xFF29B6F6)
+        "LP Deposit"  -> Color(0xFFFFB300)
+        "Freemint"    -> ColorAccent
+        "Arbmint"     -> Color(0xFFFF9800)
+        "Buyback"     -> Color(0xFFFF9800)
+        else          -> tagColor
+    }
+    val ageStr = ecoTimeAgo(tx.timestamp)
 
-                Spacer(modifier = Modifier.height(4.dp))
+    // ── Same flat-row layout as Latest Trades ──────────────────────────────
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(ColorInputBg)
+            .clickable { showDetail = true }
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Pill label
+        Box(
+            modifier = Modifier
+                .background(tradeLabelColor.copy(alpha = 0.18f), RoundedCornerShape(4.dp))
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+        ) {
+            Text(tradeLabel, color = tradeLabelColor, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(modifier = Modifier.width(8.dp))
 
-                // Row 2: Sent ➜ Received — white font, no colors
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        tx.sent, color = Color.White, fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                    Text(
-                        " ➜ ", color = Color.White.copy(alpha = 0.5f), fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        tx.received, color = Color.White, fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                }
-
-                // Price impact (only for DEX swaps)
-                tx.priceImpact?.let { impact ->
-                    val impactText = String.format("%+.2f%%", impact)
-                    val impactColor = if (impact >= 0) Color(0xFF4CAF50) else Color(0xFFFF5252)
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(top = 3.dp)
+        // Middle column: description + address + price impact
+        Column(modifier = Modifier.weight(1f)) {
+            // Description: sent → received on one line
+            Text(
+                "${tx.sent} → ${tx.received}",
+                color = Color.White, fontSize = 12.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
+            // Trader address
+            if (truncAddr.isNotEmpty()) {
+                Text(truncAddr, color = ColorAccent, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            }
+            // Price impact badge (DEX swaps only)
+            tx.priceImpact?.let { impact ->
+                val impactText = String.format("%+.2f%%", impact)
+                val impactColor = if (impact >= 0) Color(0xFF4CAF50) else Color(0xFFFF5252)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Impact ", color = Color.White.copy(alpha = 0.45f), fontSize = 10.sp)
+                    Box(
+                        modifier = Modifier
+                            .background(impactColor.copy(alpha = 0.15f), RoundedCornerShape(3.dp))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
                     ) {
-                        Text("Price impact ", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp)
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = impactColor.copy(alpha = 0.15f)
-                        ) {
-                            Text(
-                                impactText, color = impactColor, fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
+                        Text(impactText, color = impactColor, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
         }
+
+        // Timestamp on the right
+        Text(ageStr, color = ColorTextDim, fontSize = 10.sp)
     }
 }
+
 
 // ─── Helpers ───────────────────────────────────────────
 

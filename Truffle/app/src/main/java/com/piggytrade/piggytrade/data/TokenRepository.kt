@@ -698,7 +698,8 @@ class TokenRepository(private val context: Context) {
                 val pid = data["pid"] as? String
                 if (pid.isNullOrEmpty()) return@filter false
                 if (data.containsKey("id_in")) return@filter false
-                if (name.contains("-")) return@filter false
+                // Exclude un-synced T2T pairs from tokens.json (dash name + no individual token id)
+                if (name.contains("-") && !data.containsKey("id")) return@filter false
                 isPidWhitelisted(pid)
             }
             .map { (name, data) ->
@@ -719,8 +720,9 @@ class TokenRepository(private val context: Context) {
                 if (pid.isNullOrEmpty()) return@filter false
                 // Exclude T2T pairs — they have id_in and don't trade against ERG
                 if (data.containsKey("id_in")) return@filter false
-                // Exclude pair-style names like "Dort-Gort" (discovered T2T pools)
-                if (name.contains("-")) return@filter false
+                // Exclude un-synced T2T pairs from tokens.json (dash name + no individual token id)
+                // but allow tokens with dashes in their name like "rsn-2" that DO have an id
+                if (name.contains("-") && !data.containsKey("id")) return@filter false
                 isPidWhitelisted(pid)
             }
             .map { it.key }

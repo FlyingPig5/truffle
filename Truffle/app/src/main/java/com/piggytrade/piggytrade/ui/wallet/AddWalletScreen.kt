@@ -4,8 +4,10 @@ import com.piggytrade.piggytrade.ui.common.*
 import com.piggytrade.piggytrade.ui.home.*
 import com.piggytrade.piggytrade.ui.swap.*
 import com.piggytrade.piggytrade.ui.settings.*
+import com.piggytrade.piggytrade.crypto.MnemonicValidator
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -14,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
@@ -29,7 +32,10 @@ import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AddWalletScreen(
     viewModel: SwapViewModel,
@@ -38,10 +44,21 @@ fun AddWalletScreen(
     initialAddress: String = "",
     onScanQr: (() -> Unit)? = null
 ) {
+    val context = LocalContext.current
+
     var walletName by remember { mutableStateOf("") }
     var isErgoPay by remember { mutableStateOf(true) }
     var address by remember { mutableStateOf(initialAddress) }
     var mnemonic by remember { mutableStateOf("") }
+
+    // BIP39 wordlist — loaded once from assets
+    val mnemonicWordSet = remember { MnemonicValidator.loadWordList(context) }
+    val mnemonicWordList = remember { MnemonicValidator.loadWordListOrdered(context) }
+
+    // Live validation result
+    val mnemonicValidation by remember(mnemonic) {
+        derivedStateOf { MnemonicValidator.validate(mnemonic, mnemonicWordSet, mnemonicWordList) }
+    }
 
     // Update address when returning from QR scanner
     LaunchedEffect(initialAddress) {
@@ -54,7 +71,6 @@ fun AddWalletScreen(
     var useBiometrics by remember { mutableStateOf(false) }
     var isLegacy by remember { mutableStateOf(false) }
 
-    val context = LocalContext.current
     val biometricManager = remember { BiometricManager.from(context) }
     val isBiometricAvailable = remember {
         biometricManager.canAuthenticate(BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
@@ -219,18 +235,24 @@ fun AddWalletScreen(
                     }
                 }
             } else {
-                // Mnemonic field
-                TogaRow(modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
+                // ── Mnemonic input with BIP39 validation ──
+                val mnemonicBorderColor = when {
+                    mnemonic.isBlank() -> Color(0xFF535C6E)
+                    mnemonicValidation.isFullyValid -> Color(0xFF28A745)
+                    else -> Color(0xFFFF4444)
+                }
+
+                TogaRow(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
                     OutlinedTextField(
                         value = mnemonic,
                         onValueChange = { mnemonic = it },
-                        placeholder = { Text("Secret mnemonic (12, 15, or 18 words)", color = Color(0xFFAAAAAA)) },
-                        modifier = Modifier.weight(1f).height(100.dp),
+                        placeholder = { Text("Secret mnemonic (12, 15, 18, 21 or 24 words)", color = Color(0xFFAAAAAA)) },
+                        modifier = Modifier.weight(1f).height(110.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = ColorInputBg,
                             unfocusedContainerColor = ColorInputBg,
-                            focusedBorderColor = Color(0xFF535C6E),
-                            unfocusedBorderColor = Color(0xFF535C6E),
+                            focusedBorderColor = mnemonicBorderColor,
+                            unfocusedBorderColor = mnemonicBorderColor,
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color.White
                         ),
@@ -239,14 +261,77 @@ fun AddWalletScreen(
                     Spacer(Modifier.width(8.dp))
                     TogaIconButton(
                         icon = "\uE2C4", // PASTE
-                        onClick = { 
-                            clipboardManager.getText()?.let { mnemonic = it.text }
-                        },
-                        modifier = Modifier.size(50.dp).height(100.dp),
+                        onClick = { clipboardManager.getText()?.let { mnemonic = it.text } },
+                        modifier = Modifier.size(50.dp).height(110.dp),
                         radius = 10.dp,
                         bgColor = ColorInputBg,
                         borderWidth = 1.dp,
                         borderColor = Color(0xFF535C6E)
+                    )
+                }
+
+                // ── Per-word chips ──
+                if (mnemonic.isNotBlank()) {
+                    val words = mnemonic.trim().split("\\s+".toRegex()).filter { it.isNotEmpty() }
+                    FlowRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        words.forEachIndexed { idx, word ->
+                            val isInvalid = idx in mnemonicValidation.invalidWordIndices
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Box(
+                                    modifier = Modifier
+                                        .background(
+                                            if (isInvalid) Color(0xFF3A0000) else Color(0xFF1E2530),
+                                            RoundedCornerShape(6.dp)
+                                        )
+                                        .border(
+                                            width = 1.dp,
+                                            color = if (isInvalid) Color(0xFFFF4444) else Color(0xFF535C6E),
+                                            shape = RoundedCornerShape(6.dp)
+                                        )
+                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                ) {
+                                    Text(
+                                        text = word,
+                                        color = if (isInvalid) Color(0xFFFF6666) else Color(0xFFCCCCCC),
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isInvalid) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                }
+                                if (isInvalid) {
+                                    Text(
+                                        text = "\"$word\" is not a\nvalid mnemonic word",
+                                        color = Color(0xFFFF4444),
+                                        fontSize = 9.sp,
+                                        textAlign = TextAlign.Center,
+                                        lineHeight = 11.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Status line ──
+                    val (statusText, statusColor) = when {
+                        mnemonicValidation.invalidWordIndices.isNotEmpty() ->
+                            Pair("Fix the highlighted words above", Color(0xFFFF4444))
+                        !mnemonicValidation.isValidWordCount ->
+                            Pair("Mnemonic must be 12, 15, 18, 21, or 24 words (currently ${mnemonic.trim().split("\\s+".toRegex()).filter { it.isNotEmpty() }.size})", Color(0xFFFF6B35))
+                        !mnemonicValidation.checksumValid ->
+                            Pair("Invalid mnemonic — checksum failed", Color(0xFFFF6B35))
+                        else ->
+                            Pair("✓ Valid mnemonic", Color(0xFF28A745))
+                    }
+                    Text(
+                        text = statusText,
+                        color = statusColor,
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(start = 4.dp, bottom = 10.dp)
                     )
                 }
 
@@ -359,7 +444,8 @@ fun AddWalletScreen(
             val isSaveEnabled = if (isErgoPay) {
                 walletName.isNotEmpty() && address.isNotEmpty()
             } else {
-                walletName.isNotEmpty() && mnemonic.isNotEmpty() && 
+                walletName.isNotEmpty() &&
+                mnemonicValidation.isFullyValid &&
                 (useBiometrics || (password.length >= 8 && password == confirmPassword))
             }
 

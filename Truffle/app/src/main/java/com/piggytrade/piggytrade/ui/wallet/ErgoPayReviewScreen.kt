@@ -738,19 +738,19 @@ fun ErgoPayReviewScreen(
                                 val absErg = kotlin.math.abs(summary.netErg)
                                 if (sendingTokens.isNotEmpty()) {
                                     // ERG shown smaller when tokens are the main item
-                                    Text("+ ${String.format("%.6f", absErg)} ERG", color = Color.White, fontSize = 14.sp)
+                                    Text("+ ${String.format("%.9f", absErg).trimEnd('0').trimEnd('.')} ERG", color = Color.White, fontSize = 14.sp)
                                 } else {
-                                    Text("${String.format("%.6f", absErg)} ERG", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                                    Text("${String.format("%.9f", absErg).trimEnd('0').trimEnd('.')} ERG", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                                 }
                                 if (summary.minerFee > 0) {
-                                    Text("(incl. miner fee: ${String.format("%.5f", summary.minerFee)} ERG)", color = ColorTextDim, fontSize = 11.sp)
+                                    Text("(incl. miner fee: ${String.format("%.9f", summary.minerFee).trimEnd('0').trimEnd('.')} ERG)", color = ColorTextDim, fontSize = 11.sp)
                                 }
                             } else if (summary.minerFee > 0 && sendingTokens.isEmpty()) {
                                 // Only the miner fee is being sent — show it as the main item
-                                Text("${String.format("%.5f", summary.minerFee)} ERG (miner fee)", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                                Text("${String.format("%.9f", summary.minerFee).trimEnd('0').trimEnd('.')} ERG (miner fee)", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                             } else if (summary.minerFee > 0) {
                                 // Sending tokens but no extra ERG — just show miner fee note
-                                Text("+ ${String.format("%.5f", summary.minerFee)} ERG (miner fee)", color = Color.White, fontSize = 14.sp)
+                                Text("+ ${String.format("%.9f", summary.minerFee).trimEnd('0').trimEnd('.')} ERG (miner fee)", color = Color.White, fontSize = 14.sp)
                             }
                         } else {
                             Text("Nothing", color = ColorTextDim, fontSize = 16.sp)
@@ -780,7 +780,7 @@ fun ErgoPayReviewScreen(
                             }
                             if (isReceivingErg) {
                                 val label = if (receivingTokens.isEmpty()) "" else " (change)"
-                                Text("${String.format("%.6f", summary.netErg)} ERG$label",
+                                Text("${String.format("%.9f", summary.netErg).trimEnd('0').trimEnd('.')} ERG$label",
                                     color = ColorAccent,
                                     fontSize = if (receivingTokens.isEmpty()) 22.sp else 13.sp,
                                     fontWeight = FontWeight.Bold)

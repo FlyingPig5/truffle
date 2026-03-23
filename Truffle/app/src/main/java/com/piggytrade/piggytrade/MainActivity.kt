@@ -16,12 +16,17 @@ import androidx.compose.ui.Modifier
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.piggytrade.piggytrade.ui.*
+import com.piggytrade.piggytrade.ui.market.MarketViewModel
 
 class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             val viewModel: SwapViewModel = viewModel()
+            val marketViewModel: MarketViewModel = viewModel()
+
+            // Startup: trigger oracle price sync via MarketViewModel
+            LaunchedEffect(Unit) { marketViewModel.syncOraclePrices() }
             val uiState by viewModel.uiState.collectAsState()
             var currentScreen by remember { mutableStateOf("main") }
             var selectedWalletForInfo by remember { mutableStateOf("") }
@@ -46,6 +51,7 @@ class MainActivity : FragmentActivity() {
                     "send_review" -> "send"
                     "qr_scanner" -> "send"
                     "qr_scanner_add_wallet" -> "add_wallet"
+                    "qr_scanner_explorer" -> "main"
                     "send_token_selector" -> "send"
                     "ergopay_review" -> "main"
                     "token_selector", "wallet_selector", "add_wallet", "wallet_info", "review_tx", "settings", "send" -> "main"
@@ -61,6 +67,7 @@ class MainActivity : FragmentActivity() {
                     when (currentScreen) {
                         "main" -> MainScreen(
                             viewModel = viewModel,
+                            marketViewModel = marketViewModel,
                             onNavigateToSettings = { currentScreen = "settings" },
                             onNavigateToTokenSelector = { context ->
                                 viewModel.setSelectionContext(context)
@@ -79,6 +86,13 @@ class MainActivity : FragmentActivity() {
                             onNavigateToSend = {
                                 viewModel.clearSendState()
                                 currentScreen = "send"
+                            },
+                            onNavigateToAddressExplorer = { address ->
+                                viewModel.openAddressExplorer(address)
+                                viewModel.setActiveTab("explorer")
+                            },
+                            onNavigateToQrScannerExplorer = {
+                                currentScreen = "qr_scanner_explorer"
                             }
                         )
                         "review_tx" -> ReviewTxScreen(
@@ -119,6 +133,7 @@ class MainActivity : FragmentActivity() {
                         "wallet_info" -> WalletInfoScreen(
                             walletName = selectedWalletForInfo,
                             viewModel = viewModel,
+                            marketViewModel = marketViewModel,
                             onBack = { currentScreen = "main" },
                             onNavigateToAddWallet = { currentScreen = "add_wallet" },
                             onNavigateToSend = {
@@ -219,6 +234,7 @@ class MainActivity : FragmentActivity() {
                         }
                         "settings" -> SettingsScreen(
                             viewModel = viewModel,
+                            marketViewModel = marketViewModel,
                             onBack = { currentScreen = "main" },
                             onNavigateToAddNode = { currentScreen = "add_node" },
                             onNavigateToManagePairs = { currentScreen = "manage_pairs" }
@@ -245,6 +261,21 @@ class MainActivity : FragmentActivity() {
                             onAddressScanned = { scannedAddress ->
                                 pendingAddWalletAddress = scannedAddress
                                 currentScreen = "add_wallet"
+                            },
+                            onErgoPayScanned = { url ->
+                                viewModel.handleErgoPayUrl(url)
+                                currentScreen = "ergopay_review"
+                            }
+                        )
+                        "qr_scanner_explorer" -> QrScannerScreen(
+                            onBack = {
+                                viewModel.setActiveTab("explorer")
+                                currentScreen = "main"
+                            },
+                            onAddressScanned = { scannedAddress ->
+                                viewModel.openAddressExplorer(scannedAddress)
+                                viewModel.setActiveTab("explorer")
+                                currentScreen = "main"
                             },
                             onErgoPayScanned = { url ->
                                 viewModel.handleErgoPayUrl(url)

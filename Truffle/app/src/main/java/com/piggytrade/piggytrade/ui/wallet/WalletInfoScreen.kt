@@ -3,6 +3,7 @@ import com.piggytrade.piggytrade.ui.theme.*
 import com.piggytrade.piggytrade.ui.common.*
 import com.piggytrade.piggytrade.ui.home.*
 import com.piggytrade.piggytrade.ui.swap.*
+import com.piggytrade.piggytrade.ui.market.MarketViewModel
 import com.piggytrade.piggytrade.ui.settings.*
 
 import androidx.compose.animation.animateColorAsState
@@ -14,6 +15,7 @@ import androidx.compose.material.icons.rounded.CurrencyExchange
 import androidx.compose.material.icons.rounded.Receipt
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Waves
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import java.text.SimpleDateFormat
@@ -53,6 +55,7 @@ import kotlinx.coroutines.delay
 fun WalletInfoScreen(
     walletName: String,
     viewModel: SwapViewModel,
+    marketViewModel: MarketViewModel,
     onBack: () -> Unit,
     onNavigateToAddWallet: () -> Unit,
     onNavigateToSend: () -> Unit = {}
@@ -127,6 +130,7 @@ fun WalletInfoScreen(
         WalletInfoContent(
             walletName = walletName,
             viewModel = viewModel,
+            marketViewModel = marketViewModel,
             onDeleteComplete = onBack,
             showTitle = false,
             onNavigateToAddWallet = onNavigateToAddWallet,
@@ -140,23 +144,26 @@ fun WalletInfoScreen(
 fun WalletInfoContent(
     walletName: String,
     viewModel: SwapViewModel,
+    marketViewModel: MarketViewModel,
     onDeleteComplete: (() -> Unit)? = null,
     showTitle: Boolean = true,
     onNavigateToAddWallet: (() -> Unit)? = null,
     onNavigateToSend: (() -> Unit)? = null,
+    onNavigateToQrScanner: (() -> Unit)? = null,
     onAddressClick: ((String) -> Unit)? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val marketState by marketViewModel.uiState.collectAsState()
     var showDeleteConfirm1 by remember { mutableStateOf(false) }
     var showDeleteConfirm2 by remember { mutableStateOf(false) }
     
     LaunchedEffect(Unit) {
         viewModel.fetchWalletBalances()
         viewModel.fetchTransactionHistory()
-        viewModel.fetchTokenUsdValues()
+        marketViewModel.fetchTokenUsdValues(uiState.walletTokens, uiState.whitelistedPools, uiState.discoveredPools, uiState.includeUnconfirmed)
     }
     
-    val tokenUsdValues = uiState.tokenUsdValues
+    val tokenUsdValues = marketState.tokenUsdValues
     val sortedTokens = remember(uiState.walletTokens, tokenUsdValues) {
         uiState.walletTokens.toList().sortedWith { a, b ->
             val usdA = tokenUsdValues[a.first] ?: 0.0
@@ -333,18 +340,40 @@ fun WalletInfoContent(
                 
                 Spacer(Modifier.height(15.dp))
                 
-                Text("Balance", color = ColorTextDim, fontSize = 12.sp)
-                Text(
-                    text = "${SwapViewModel.formatErg(uiState.walletErgBalance)} ERG",
-                    color = ColorAccent,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("Balance", color = ColorTextDim, fontSize = 12.sp)
+                        Text(
+                            text = "${SwapViewModel.formatErg(uiState.walletErgBalance)} ERG",
+                            color = ColorAccent,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    if (onNavigateToQrScanner != null && walletName.isNotEmpty() && walletName != "Select Wallet") {
+                        IconButton(
+                            onClick = onNavigateToQrScanner,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.QrCodeScanner,
+                                contentDescription = "Scan QR",
+                                tint = ColorAccent,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    }
+                }
 
                 // Total portfolio USD value
-                val ergPriceUsd = uiState.ergPriceUsd
+                val ergPriceUsd = marketState.ergPriceUsd
                 val ergUsdValue = if (ergPriceUsd != null) uiState.walletErgBalance * ergPriceUsd else null
-                val tokenUsdTotal = uiState.tokenUsdValues.values.sum()
+                val tokenUsdTotal = marketState.tokenUsdValues.values.sum()
                 val totalPortfolio = (ergUsdValue ?: 0.0) + tokenUsdTotal
                 if (ergPriceUsd != null) {
                     Text(
@@ -424,7 +453,7 @@ fun WalletInfoContent(
                     modifier = Modifier.fillMaxWidth().weight(1f)
                 ) {
                     items(sortedTokens) { (tokenId, amount) ->
-                        TokenBalanceItem(tokenId, amount, viewModel)
+                        TokenBalanceItem(tokenId, amount, viewModel, marketViewModel)
                     }
                 }
             }
@@ -704,8 +733,8 @@ fun NetworkTradeHistoryItemView(trade: NetworkTransaction, viewModel: SwapViewMo
 }
 
 @Composable
-fun TokenBalanceItem(tokenId: String, amount: Long, viewModel: SwapViewModel) {
-    val usdValue = viewModel.getTokenUsdValue(tokenId)
+fun TokenBalanceItem(tokenId: String, amount: Long, viewModel: SwapViewModel, marketViewModel: MarketViewModel? = null) {
+    val usdValue = marketViewModel?.getTokenUsdValue(tokenId)
     Card(
         modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
         colors = CardDefaults.cardColors(containerColor = ColorInputBg),
