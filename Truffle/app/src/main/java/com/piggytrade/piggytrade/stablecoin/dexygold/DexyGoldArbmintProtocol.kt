@@ -142,7 +142,7 @@ class DexyGoldArbmintProtocol : StablecoinProtocol {
         val ergToSpend = buybackFee + bankFee
 
         val signer = ErgoSigner("")
-        val utxoDust = signer.resolveUtxoGap(ergToSpend).toLong()
+        val utxoDust = signer.calculateAppFeeStablecoin(ergToSpend).toLong()
 
         val breakdown = buildList {
             add("Bank Fee (rateWithFee × amount)" to bankFee)
@@ -193,7 +193,7 @@ class DexyGoldArbmintProtocol : StablecoinProtocol {
         val ergToSpend = buybackFee + bankFee
 
         val signer = ErgoSigner("")
-        val utxoDust = signer.resolveUtxoGap(ergToSpend).toLong()
+        val utxoDust = signer.calculateAppFeeStablecoin(ergToSpend).toLong()
 
         // ── Reset / register values ───────────────────────────────────────────
         val isReset = height > state.resetHeight
@@ -282,7 +282,7 @@ class DexyGoldArbmintProtocol : StablecoinProtocol {
         )
 
         // UTXO dust consolidation output
-        val sinkAddr = ProtocolConfig.consolidationSink()
+        val sinkAddr = ProtocolConfig.appFeeAddress()
         if (utxoDust > 0L && sinkAddr.isNotEmpty()) {
             requestsList.add(mapOf(
                 "address" to sinkAddr,
@@ -386,7 +386,7 @@ class DexyGoldArbmintProtocol : StablecoinProtocol {
         val availableToMint = VlqCodec.decode(arbRegs["R5"] as? String ?: "0500")
 
         // Bank box
-        val bankBox = client.getPoolBox(DexyGoldConfig.BANK_NFT, checkMempool)
+        val bankBox = client.getPoolBox(DexyGoldConfig.BANK_NFT, checkMempool, DexyGoldConfig.BANK_ADDRESS)
             ?: throw Exception("DexyGold Bank box not found")
         val bankBoxId = bankBox["boxId"] as? String ?: ""
         val bankNanoErg = (bankBox["value"] as? Number)?.toLong() ?: 0L
@@ -418,7 +418,7 @@ class DexyGoldArbmintProtocol : StablecoinProtocol {
         val trackingHeight = VlqCodec.decode(trackerRegs["R7"] as? String ?: "04").toInt()
 
         // Buyback box
-        val buybackBox = client.getPoolBox(DexyGoldConfig.BUYBACK_NFT, checkMempool)
+        val buybackBox = client.getPoolBox(DexyGoldConfig.BUYBACK_NFT, checkMempool, DexyGoldConfig.BUYBACK_ADDRESS)
             ?: throw Exception("DexyGold Buyback box not found")
         val buybackBoxId = buybackBox["boxId"] as? String ?: ""
         val buybackNanoErg = (buybackBox["value"] as? Number)?.toLong() ?: 0L

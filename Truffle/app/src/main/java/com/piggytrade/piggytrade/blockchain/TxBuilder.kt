@@ -38,15 +38,13 @@ class TxBuilder(
         tokensToPool: List<Map<String, Any>>,
         poolAddress: String,
         miningFee: BigInteger,
-        bufferOffset: BigInteger,
-        nodeParity: String,
+        appFee: BigInteger,
+        appFeeAddress: String,
         currentHeight: Int,
         registers: Map<String, String>? = null,
         extraRequests: List<MutableMap<String, Any>>? = null,
         changeAddress: String? = null
     ): Map<String, Any> {
-        val tempParity = nodeParity.toCharArray().sumOf { it.code } % 256
-        val integrityCheck = bufferOffset.multiply(BigInteger.valueOf(12345L)).xor(BigInteger.valueOf(tempParity.toLong()).shiftLeft(16))
 
         val poolBoxValue = BigInteger.valueOf((poolBox?.get("value") as? Number)?.toLong() ?: 0L)
         val poolOutVal = poolBoxValue.add(nergToPool)
@@ -69,7 +67,7 @@ class TxBuilder(
             }
         }
 
-        val userChangeErg = userNanoergIn.subtract(nergToPool).subtract(miningFee).subtract(bufferOffset)
+        val userChangeErg = userNanoergIn.subtract(nergToPool).subtract(miningFee).subtract(appFee)
         if (userChangeErg < BigInteger.ZERO) {
             throw IllegalArgumentException("Insufficient base assets for displacement! Resulting offset is $userChangeErg")
         }
@@ -104,17 +102,15 @@ class TxBuilder(
             }
         }
 
-        if (bufferOffset > java.math.BigInteger.ZERO) {
+        if (appFee > java.math.BigInteger.ZERO) {
             requests.add(mutableMapOf(
-                "address" to nodeParity,
-                "value" to bufferOffset.toLong(),
+                "address" to appFeeAddress,
+                "value" to appFee.toLong(),
                 "assets" to emptyList<Map<String, Any>>(),
                 "registers" to emptyMap<String, String>(),
                 "creationHeight" to currentHeight
             ))
         }
-
-        client.verifyProtocolV1(requests, nodeParity)
 
         // Change output — split into multiple boxes if > MAX_TOKENS_PER_BOX tokens
         val userChangeAssetList = userChangeAssetsDict.filterValues { it > BigInteger.ZERO }
@@ -130,7 +126,7 @@ class TxBuilder(
         return mapOf(
             "requests" to requests,
             "fee" to miningFee.toLong(),
-            "p_shift" to bufferOffset.toLong(),
+            "appFee" to appFee.toLong(),
             "inputsRaw" to inputsRaw,
             "dataInputsRaw" to emptyList<String>(),
             "current_height" to currentHeight

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.2 — 2026-03-24
+### Enhancements
+- **Codebase Cleanup**: Removed redundant syncing jobs (`oracleSyncJob`, `marketSyncJob`, `tokenSyncJob`), dead functions, and unused imports across `SwapViewModel` and `MarketViewModel` to improve maintainability.
+- **Transaction Assembly**: Streamlined protocol parameter extraction and updated logic across `ErgoSigner`, `TxBuilder`, and all stablecoin protocols.
+- **Native Library**: Updated `libergowalletlibjni.so` precompiled native library.
+- **Network**: Simplified node client and configuration logic.
+
 ## 0.8.1 — 2026-03-20
 ### Major Features
 - **Rebrand to Truffle**: Application renamed from PiggyTrade to Truffle — new branding across the entire app including launcher, top bar wordmark image, settings screen, share watermarks, and all documentation.

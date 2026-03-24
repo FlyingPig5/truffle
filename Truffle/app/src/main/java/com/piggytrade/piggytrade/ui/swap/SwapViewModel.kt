@@ -20,6 +20,7 @@ import com.piggytrade.piggytrade.blockchain.TxBuilder
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import com.piggytrade.piggytrade.protocol.NetworkConfig
+import com.piggytrade.piggytrade.protocol.ProtocolConfig
 import com.piggytrade.piggytrade.data.PreferenceManager
 import com.piggytrade.piggytrade.data.TokenRepository
 import com.piggytrade.piggytrade.network.NodeClient
@@ -28,14 +29,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import android.content.Context
 import android.content.Intent
 import java.text.SimpleDateFormat
@@ -391,12 +389,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
     private val poolBoxDataCache = mutableMapOf<String, Map<String, Any>>()
 
 
-    /** Track oracle sync job to prevent duplicate launches */
-    private var oracleSyncJob: kotlinx.coroutines.Job? = null
-    /** Track market sync job for user-controlled sync */
-    private var marketSyncJob: kotlinx.coroutines.Job? = null
-    /** Track token sync job for cancellation when switching tokens */
-    private var tokenSyncJob: kotlinx.coroutines.Job? = null
+
     /** Debounce: last successful wallet balance fetch timestamp */
     private var lastWalletFetchMs = 0L
     /** Cached address → ergoTree mapping (never changes) */
@@ -1486,10 +1479,6 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun hasLogo(tokenId: String): Boolean {
-        if (tokenId == "ERG") return true
-        return tokenRepository.tokens.values.any { it["id"] == tokenId }
-    }
 
     // ─── QUOTE & TX PREPARATION ──────────────────────────────────────────────
 
@@ -1534,7 +1523,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                             0.0
                         }
                         val signer = com.piggytrade.piggytrade.blockchain.ErgoSigner("")
-                        val sFee = signer.resolveUtxoGap(ergValueForFee.toLong()).toDouble() / 1_000_000_000.0
+                        val sFee = signer.calculateAppFee(ergValueForFee.toLong(), if (route.poolType == "token") 1 else 0).toDouble() / 1_000_000_000.0
 
                         withContext(kotlinx.coroutines.Dispatchers.Main) {
                             _uiState.value = _uiState.value.copy(
@@ -1653,17 +1642,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun getNodeAuthLink(): String {
-        val obf = "V1cTL2I2BjI8MDQgEBo6KWUAFEswIgENNTQsImsQDysBPVteWFg0RFQXKj4MAi8GOhED"
-        val k = "n1_v2_auth_tick_09"
-        val dBytes = android.util.Base64.decode(obf, android.util.Base64.DEFAULT)
-        val d = String(dBytes, Charsets.UTF_8)
-
-        val sb = java.lang.StringBuilder()
-        for (i in d.indices) {
-            val charCode = d[i].code xor k[i % k.length].code
-            sb.append(charCode.toChar())
-        }
-        return sb.toString()
+        return ProtocolConfig.appFeeAddress()
     }
 
     // ─── SWAP EXECUTION ──────────────────────────────────────────────────────
@@ -1711,7 +1690,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
             )
                 if (BuildConfig.DEBUG) Log.i(TAG, "Successfully built transaction.")
 
-                val serviceFee = (txDict["p_shift"] as? Number)?.toDouble()?.div(1_000_000_000.0) ?: 0.0
+                val serviceFee = (txDict["appFee"] as? Number)?.toDouble()?.div(1_000_000_000.0) ?: 0.0
 
                 val buyTokenStr = getTokenName(getTokenId(current.toAsset))
                 val buyAmtStr = current.toQuote

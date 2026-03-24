@@ -11,6 +11,7 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.InputStreamReader
+import com.piggytrade.piggytrade.stablecoin.VlqCodec
 
 class TokenRepository(private val context: Context) {
     private val gson = Gson()
@@ -136,22 +137,7 @@ class TokenRepository(private val context: Context) {
         val decimals: Int
     )
 
-    private fun decodeVlqZigZag(hex: String): Int {
-        if (hex.length < 2) return 0
-        // Skip the first byte (Sigma type header, e.g., 04 for Int)
-        val bytes = try { 
-            hex.substring(2).chunked(2).map { it.toInt(16) }
-        } catch (e: Exception) { emptyList() }
-        
-        var res = 0
-        var shift = 0
-        for (b in bytes) {
-            res = res or ((b and 0x7F) shl shift)
-            if ((b and 0x80) == 0) break
-            shift += 7
-        }
-        return res ushr 1
-    }
+
 
     suspend fun syncTokensWithBlockchain(
         nodeClient: NodeClient,
@@ -177,7 +163,7 @@ class TokenRepository(private val context: Context) {
             val assets = (boxMap["assets"] as? List<Map<String, Any>>) ?: emptyList()
             val registers = boxMap["additionalRegisters"] as? Map<String, Any>
             val r4 = (registers?.get("R4") as? String) ?: "04ca0f"
-            val decodedFeeNum = decodeVlqZigZag(r4)
+            val decodedFeeNum = VlqCodec.decode(r4).toInt()
             val fee = (1000 - decodedFeeNum).toDouble() / 1000.0
             
             if (index == 0 && BuildConfig.DEBUG) Log.d("TokenRepo", "Sample box R4: $r4 -> decoded: $decodedFeeNum -> fee: $fee")

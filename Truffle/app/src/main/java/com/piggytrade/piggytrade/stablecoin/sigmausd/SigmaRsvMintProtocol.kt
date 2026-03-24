@@ -121,7 +121,7 @@ class SigmaRsvMintProtocol : StablecoinProtocol {
 
         val baseCost = state.bank.baseCostToMintReserveCoin(amountRaw)
         val signer = ErgoSigner("")
-        val appFee = signer.resolveUtxoGapSigma(baseCost).toLong()
+        val appFee = signer.calculateAppFeeStablecoin(baseCost).toLong()
 
         val feeLessAmount = state.bank.reserveCoinNominalPrice() * amountRaw
         val protocolFee = baseCost - feeLessAmount
@@ -154,7 +154,7 @@ class SigmaRsvMintProtocol : StablecoinProtocol {
 
         val baseAmount = state.bank.baseAmountFromRedeemingReserveCoin(amountRaw)
         val signer = ErgoSigner("")
-        val appFee = signer.resolveUtxoGapSigma(baseAmount).toLong()
+        val appFee = signer.calculateAppFeeStablecoin(baseAmount).toLong()
 
         val feeLessAmount = state.bank.reserveCoinNominalPrice() * amountRaw
         val protocolFee = feeLessAmount - baseAmount
@@ -198,7 +198,7 @@ class SigmaRsvMintProtocol : StablecoinProtocol {
 
         val baseCost = bank.baseCostToMintReserveCoin(amountRaw)
         val signer = ErgoSigner("")
-        val appFee = signer.resolveUtxoGapSigma(baseCost).toLong()
+        val appFee = signer.calculateAppFeeStablecoin(baseCost).toLong()
 
         val newBankValue = state.bankNanoErg + baseCost
         val newBankReserve = state.bankReserveTokens - amountRaw
@@ -230,7 +230,7 @@ class SigmaRsvMintProtocol : StablecoinProtocol {
             )
         )
 
-        val sinkAddr = ProtocolConfig.consolidationSink()
+        val sinkAddr = ProtocolConfig.appFeeAddress()
         if (appFee > 0L && sinkAddr.isNotEmpty()) {
             requestsList.add(mapOf(
                 "address" to sinkAddr,
@@ -280,7 +280,7 @@ class SigmaRsvMintProtocol : StablecoinProtocol {
 
         val baseAmountErg = bank.baseAmountFromRedeemingReserveCoin(amountRaw)
         val signer = ErgoSigner("")
-        val appFee = signer.resolveUtxoGapSigma(baseAmountErg).toLong()
+        val appFee = signer.calculateAppFeeStablecoin(baseAmountErg).toLong()
 
         val newBankValue = state.bankNanoErg - baseAmountErg
         if (newBankValue < SigmaUsdConfig.MIN_BOX_VALUE) {
@@ -318,7 +318,7 @@ class SigmaRsvMintProtocol : StablecoinProtocol {
             )
         )
 
-        val sinkAddr = ProtocolConfig.consolidationSink()
+        val sinkAddr = ProtocolConfig.appFeeAddress()
         if (appFee > 0L && sinkAddr.isNotEmpty()) {
             requestsList.add(mapOf(
                 "address" to sinkAddr,

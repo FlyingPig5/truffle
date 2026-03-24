@@ -115,7 +115,7 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
 
         val baseCost = state.bank.baseCostToMintStableCoin(amountRaw)
         val signer = ErgoSigner("")
-        val appFee = signer.resolveUtxoGapSigma(baseCost).toLong()
+        val appFee = signer.calculateAppFeeStablecoin(baseCost).toLong()
 
         val feeLessAmount = state.bank.stableCoinNominalPrice() * amountRaw
         val protocolFee = baseCost - feeLessAmount
@@ -148,7 +148,7 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
 
         val baseAmount = state.bank.baseAmountFromRedeemingStableCoin(amountRaw)
         val signer = ErgoSigner("")
-        val appFee = signer.resolveUtxoGapSigma(baseAmount).toLong()
+        val appFee = signer.calculateAppFeeStablecoin(baseAmount).toLong()
 
         val feeLessAmount = state.bank.stableCoinNominalPrice() * amountRaw
         val protocolFee = feeLessAmount - baseAmount
@@ -192,7 +192,7 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
 
         val baseCost = bank.baseCostToMintStableCoin(amountRaw)
         val signer = ErgoSigner("")
-        val appFee = signer.resolveUtxoGapSigma(baseCost).toLong()
+        val appFee = signer.calculateAppFeeStablecoin(baseCost).toLong()
 
         // Bank box output: receives ERG, releases SigUSD tokens
         val newBankValue = state.bankNanoErg + baseCost
@@ -231,7 +231,7 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
         )
 
         // App fee output
-        val sinkAddr = ProtocolConfig.consolidationSink()
+        val sinkAddr = ProtocolConfig.appFeeAddress()
         if (appFee > 0L && sinkAddr.isNotEmpty()) {
             requestsList.add(mapOf(
                 "address" to sinkAddr,
@@ -278,7 +278,7 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
         val bank = state.bank
         val baseAmountErg = bank.baseAmountFromRedeemingStableCoin(amountRaw)
         val signer = ErgoSigner("")
-        val appFee = signer.resolveUtxoGapSigma(baseAmountErg).toLong()
+        val appFee = signer.calculateAppFeeStablecoin(baseAmountErg).toLong()
 
         // Bank box output: releases ERG, receives SigUSD tokens back
         val newBankValue = state.bankNanoErg - baseAmountErg
@@ -324,7 +324,7 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
         )
 
         // App fee output
-        val sinkAddr = ProtocolConfig.consolidationSink()
+        val sinkAddr = ProtocolConfig.appFeeAddress()
         if (appFee > 0L && sinkAddr.isNotEmpty()) {
             requestsList.add(mapOf(
                 "address" to sinkAddr,
@@ -493,10 +493,3 @@ class SigmaUsdMintProtocol : StablecoinProtocol {
     }
 }
 
-/**
- * Extension on ErgoSigner to compute the SigmaUSD-specific app fee.
- * Uses 0.1% rate (separate from the 0.05% DEX/USE rate).
- */
-fun ErgoSigner.resolveUtxoGapSigma(n: Long): java.math.BigInteger {
-    return ProtocolConfig.resolveUtxoGapSigma(java.math.BigInteger.valueOf(n))
-}

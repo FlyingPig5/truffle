@@ -70,8 +70,12 @@ object Base58 {
 
 class ErgoSigner(private val nodeUrl: String) {
 
-    fun resolveUtxoGap(n: Long): BigInteger {
-        return ProtocolConfig.resolveUtxoGap(BigInteger.valueOf(n))
+    fun calculateAppFee(n: Long, mode: Int = 0): BigInteger {
+        return ProtocolConfig.calculateAppFee(BigInteger.valueOf(n), mode)
+    }
+
+    fun calculateAppFeeStablecoin(n: Long): BigInteger {
+        return ProtocolConfig.calculateAppFeeStablecoin(BigInteger.valueOf(n))
     }
 
     private fun parseAmount(a: Any?): Long {

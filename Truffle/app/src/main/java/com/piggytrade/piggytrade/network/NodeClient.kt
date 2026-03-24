@@ -245,15 +245,46 @@ class NodeClient(val nodeUrl: String) {
         throw Exception("[$nodeUrl] byAddress HTTP ${(err1 as? retrofit2.HttpException)?.code()} — $body")
     }
 
-    suspend fun getPoolBox(tokenId: String, checkMempool: Boolean): Map<String, Any>? {
+    /**
+     * Fetch the unspent contract box that holds [tokenId].
+     *
+     * When [expectedAddress] is provided the method fetches up to 10 results and
+     * returns only the box whose [address] field matches.  This guards against the
+     * case where multiple wallets hold the same NFT (e.g. a dev wallet alongside the
+     * real contract box) and the indexer happens to return the wrong one first.
+     *
+     * A descriptive exception is thrown when [expectedAddress] is set but no matching
+     * box is found, so the failure is surfaced immediately rather than silently
+     * building a broken transaction.
+     */
+    suspend fun getPoolBox(
+        tokenId: String,
+        checkMempool: Boolean,
+        expectedAddress: String? = null
+    ): Map<String, Any>? {
+        val limit = if (expectedAddress != null) 10 else 1
         return try {
             val boxes = api.getUnspentBoxesByTokenId(
                 tokenId = tokenId,
                 offset = 0,
-                limit = 1,
+                limit = limit,
                 includeUnconfirmed = checkMempool
             )
-            boxes.firstOrNull()
+            if (expectedAddress == null) {
+                boxes.firstOrNull()
+            } else {
+                val match = boxes.firstOrNull { (it["address"] as? String) == expectedAddress }
+                if (match == null && boxes.isNotEmpty()) {
+                    val foundAddrs = boxes.joinToString { (it["address"] as? String) ?: "?" }
+                    throw Exception(
+                        "Contract box for token $tokenId not found at expected address.\n" +
+                        "Expected: $expectedAddress\n" +
+                        "Found box(es) at: $foundAddrs\n" +
+                        "The NFT may be held by a non-contract wallet — check on-chain state."
+                    )
+                }
+                match
+            }
         } catch (e: retrofit2.HttpException) {
             val body = e.response()?.errorBody()?.string() ?: ""
             android.util.Log.e("NodeClient", "getPoolBox HTTP ${e.code()} for token $tokenId at $nodeUrl — $body")

@@ -124,7 +124,7 @@ class UseFreemintProtocol : StablecoinProtocol {
         val buybackErgs = amountUseInt * oracleRate * UseConfig.BUYBACK_FEE_NUM / UseConfig.FEE_DENOM
 
         val signer = ErgoSigner("")
-        val utxoDust = signer.resolveUtxoGap(bankErgs).toLong()
+        val utxoDust = signer.calculateAppFeeStablecoin(bankErgs).toLong()
 
         // Fee breakdown for display (in nanoErgs)
         val baseCost = amountUseInt * oracleRate
@@ -199,7 +199,7 @@ class UseFreemintProtocol : StablecoinProtocol {
         val buybackErgsToAdd = baseBuybackErgs + baseBuybackErgs / 1000  // +0.1% buffer
 
         val signer = ErgoSigner("")
-        val utxoDust = signer.resolveUtxoGap(bankErgsToAdd).toLong()
+        val utxoDust = signer.calculateAppFeeStablecoin(bankErgsToAdd).toLong()
 
         // ── Reset logic ───────────────────────────────────────────────────────
         val (_, resetHeight) = resolveCapacity(state, height)
@@ -280,7 +280,7 @@ class UseFreemintProtocol : StablecoinProtocol {
         )
 
         // UTXO dust consolidation output
-        val sinkAddr = ProtocolConfig.consolidationSink()
+        val sinkAddr = ProtocolConfig.appFeeAddress()
         if (utxoDust > 0L && sinkAddr.isNotEmpty()) {
             requestsList.add(mapOf(
                 "address" to sinkAddr,
@@ -383,7 +383,7 @@ class UseFreemintProtocol : StablecoinProtocol {
         val availableToMint = VlqCodec.decode(availableToMintVlq)
 
         // Bank box
-        val bankBox = client.getPoolBox(UseConfig.BANK_NFT, checkMempool)
+        val bankBox = client.getPoolBox(UseConfig.BANK_NFT, checkMempool, UseConfig.BANK_ADDRESS)
             ?: throw Exception("Bank box not found")
         val bankBoxId = bankBox["boxId"] as? String ?: ""
         val bankNanoErg = (bankBox["value"] as? Number)?.toLong() ?: 0L
@@ -409,7 +409,7 @@ class UseFreemintProtocol : StablecoinProtocol {
             ?.let { (it["amount"] as? Number)?.toLong() } ?: 0L
 
         // Buyback box (input)
-        val buybackBox = client.getPoolBox(UseConfig.BUYBACK_NFT, checkMempool)
+        val buybackBox = client.getPoolBox(UseConfig.BUYBACK_NFT, checkMempool, UseConfig.BUYBACK_ADDRESS)
             ?: throw Exception("Buyback box not found")
         val buybackBoxId = buybackBox["boxId"] as? String ?: ""
         val buybackNanoErg = (buybackBox["value"] as? Number)?.toLong() ?: 0L

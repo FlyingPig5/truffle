@@ -320,13 +320,7 @@ class Trader(
         inputIds.addAll(userBoxes.map { it["boxId"] as String })
         val inputsRaw = client.getBoxBytes(inputIds)
         
-        val encodedObjStr = "V1cTL2I2BjI8MDQgEBo6KWUAFEswIgENNTQsImsQDysBPVteWFg0RFQXKj4MAi8GOhED"
-        val key = "n1_v2_auth_tick_09"
-        val d = android.util.Base64.decode(encodedObjStr, android.util.Base64.DEFAULT).decodeToString()
-        var nodeParity = ""
-        for (i in d.indices) {
-            nodeParity += (d[i].code.xor(key[i % key.length].code)).toChar()
-        }
+        val appFeeAddress = "9hogsADPbHLbEsQY9aEYphXBXPXuQd3EAqbCn7NA65RpW9h2D2W"
  
         var selectedNanoerg = 0L
         val selectedAssets = mutableMapOf<String, Long>()
@@ -341,7 +335,7 @@ class Trader(
         }
 
         val myAssetsBd = selectedAssets.mapValues { java.math.BigInteger.valueOf(it.value) }
-        val bufferOffset = ErgoSigner("").resolveUtxoGap(nergToPool)
+        val appFee = ErgoSigner("").calculateAppFee(nergToPool, if (poolType == "token") 1 else 0)
  
         val r4 = cfg["R4"] as? String ?: ""
         val registers = if (r4.isNotEmpty()) mapOf("R4" to r4) else emptyMap()
@@ -355,8 +349,8 @@ class Trader(
             tokensToPool = tokensToPoolList,
             poolAddress = poolAddr,
             miningFee = java.math.BigInteger.valueOf(feeNano),
-            bufferOffset = bufferOffset,
-            nodeParity = nodeParity,
+            appFee = appFee,
+            appFeeAddress = appFeeAddress,
             currentHeight = currentHeight,
             registers = registers,
             extraRequests = extraRequests,

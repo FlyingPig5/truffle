@@ -368,17 +368,6 @@ class MarketViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    // ─── AMM helper ──────────────────────────────────────────────────────
-
-    fun ammSellOutput(ergReserve: Long, tokenReserve: Long, inputAmount: Long, feePercent: Double): Long {
-        if (tokenReserve <= 0 || ergReserve <= 0 || inputAmount <= 0) return 0L
-        val feeNum = ((1.0 - feePercent) * 1000).toLong()
-        val feeDenom = 1000L
-        val numerator = ergReserve * inputAmount * feeNum
-        val denominator = tokenReserve * feeDenom + inputAmount * feeNum
-        return if (denominator > 0) numerator / denominator else 0L
-    }
-
     // ─── Token USD values ─────────────────────────────────────────────────
 
     fun fetchTokenUsdValues(
