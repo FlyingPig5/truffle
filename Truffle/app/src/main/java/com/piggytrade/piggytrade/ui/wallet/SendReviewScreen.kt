@@ -352,28 +352,42 @@ fun SendReviewScreen(
             },
             containerColor = ColorCard,
             title = {
-                Text("Transaction Submitted", color = ColorAccent, fontWeight = FontWeight.Bold)
+                Text(
+                    if (data.isSimulation) "Simulation Successful" else "Transaction Submitted", 
+                    color = if (data.isSimulation) Color.Yellow else ColorAccent, 
+                    fontWeight = FontWeight.Bold
+                )
             },
             text = {
                 Column {
-                    Text(
-                        "Your transaction has been sent to the network.",
-                        color = Color.White,
-                        fontSize = 14.sp
-                    )
+                    if (data.isSimulation) {
+                        Text(
+                            "The transaction was validated by the node but NOT broadcast to the network. No funds were sent.",
+                            color = Color.White,
+                            fontSize = 14.sp
+                        )
+                    } else {
+                        Text(
+                            "Your transaction has been sent to the network.",
+                            color = Color.White,
+                            fontSize = 14.sp
+                        )
+                    }
                     Spacer(Modifier.height(15.dp))
                     Text("Transaction ID:", color = ColorTextDim, fontSize = 12.sp)
                     SelectionContainer {
                         Text(data.txId, color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                     }
-                    Spacer(Modifier.height(15.dp))
-                    Text(
-                        "View on Sigmaspace",
-                        color = ColorBlue,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.clickable { uriHandler.openUri(data.sigmaspaceUrl) }
-                    )
+                    if (!data.isSimulation) {
+                        Spacer(Modifier.height(15.dp))
+                        Text(
+                            "View on Sigmaspace",
+                            color = ColorBlue,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.clickable { uriHandler.openUri(data.sigmaspaceUrl) }
+                        )
+                    }
                 }
             },
             confirmButton = {

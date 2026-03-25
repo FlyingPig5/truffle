@@ -92,28 +92,7 @@ fun EcosystemScreen(viewModel: SwapViewModel, marketViewModel: MarketViewModel, 
         }
     }
 
-    // Pull-to-refresh state — separate from isLoadingEcosystem to avoid
-    // pagination (fetchMore) triggering the pull indicator
-    val pullRefreshState = rememberPullToRefreshState()
-    var isManualRefreshing by remember { mutableStateOf(false) }
-
-    // Trigger refresh when pull gesture completes
-    if (pullRefreshState.isRefreshing && !isManualRefreshing) {
-        isManualRefreshing = true
-        LaunchedEffect(true) {
-            marketViewModel.fetchEcosystemData(forceRefresh = true)
-        }
-    }
-
-    // Stop the indicator only when a manual refresh finishes
-    LaunchedEffect(marketState.isLoadingEcosystem) {
-        if (!marketState.isLoadingEcosystem && isManualRefreshing) {
-            isManualRefreshing = false
-            pullRefreshState.endRefresh()
-        }
-    }
-
-    Box(modifier = Modifier.fillMaxSize().nestedScroll(pullRefreshState.nestedScrollConnection)) {
+    Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Title + refresh icon
             Row(
@@ -758,7 +737,7 @@ fun EcosystemScreen(viewModel: SwapViewModel, marketViewModel: MarketViewModel, 
                             LaunchedEffect(filteredActivity.size) {
                                 marketViewModel.fetchMoreEcosystemActivity()
                             }
-                        } else if (marketState.isLoadingEcosystem && !isManualRefreshing) {
+                        } else if (marketState.isLoadingEcosystem) {
                             Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator(color = ColorAccent, modifier = Modifier.size(20.dp))
                             }
@@ -768,13 +747,6 @@ fun EcosystemScreen(viewModel: SwapViewModel, marketViewModel: MarketViewModel, 
             }
         }
 
-        // Pull-to-refresh indicator
-        PullToRefreshContainer(
-            state = pullRefreshState,
-            modifier = Modifier.align(Alignment.TopCenter),
-            containerColor = ColorCard,
-            contentColor = ColorAccent
-        )
     }
 }
 

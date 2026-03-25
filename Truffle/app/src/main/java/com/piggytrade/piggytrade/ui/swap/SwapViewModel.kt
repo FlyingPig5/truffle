@@ -894,7 +894,9 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                     walletAddresses = allAddresses,
                     selectedAddresses = selectedAddrs,
                     changeAddress = changeAddr,
-
+                    walletTokens = emptyMap(),
+                    walletErgBalance = 0.0,
+                    networkTrades = emptyList()
                 )
                 preferenceManager.selectedWallet = internalKey
                 fetchWalletBalances(force = true)
@@ -1470,7 +1472,8 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 changeAddress = changeAddr,
                 addressBoxes = emptyMap(),
                 walletErgBalance = 0.0,
-                walletTokens = emptyMap()
+                walletTokens = emptyMap(),
+                networkTrades = emptyList()
             )
             
             if (newSelectedWallet != "Select Wallet" && newAddress.isNotEmpty()) {
@@ -2146,16 +2149,21 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 val signedTxMap = signer.txGson.fromJson(signedJson, Map::class.java) as Map<String, Any>
 
                 val txId = try {
-                    client.api.submitTransaction(signedTxMap)
+                    if (current.isSimulation) {
+                        client.api.checkTransaction(signedTxMap)
+                        signedTxMap["id"] as? String ?: "Simulation"
+                    } else {
+                        client.api.submitTransaction(signedTxMap)
+                    }
                 } catch (he: retrofit2.HttpException) {
                     val errorBody = he.response()?.errorBody()?.string() ?: he.message()
-                    throw Exception("Node rejected tx: $errorBody")
+                    throw Exception("Node rejected tx: $errorBody\n\n=== SIGNED TX JSON ===\n$signedJson")
                 }
 
                 _uiState.value = current.copy(
                     txSuccessData = TxSuccessData(
                         txId = txId,
-                        isSimulation = false,
+                        isSimulation = current.isSimulation,
                         sigmaspaceUrl = "https://sigmaspace.io/tx/$txId",
                         signedTxJson = signedJson
                     )
@@ -2607,8 +2615,10 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 val client = nodeClient ?: return@launch
-                val currentOffset = if (loadMore) _uiState.value.historyOffset else 0
-                val limit = 50
+                val pageSize = 50
+                val currentLimit = if (loadMore) _uiState.value.historyOffset + pageSize else pageSize
+                val limit = currentLimit
+                val currentOffset = 0
 
                 // Build ergoTree → address map — use cache to skip API calls
                 val ergoTreeToAddr = mutableMapOf<String, String>()
@@ -2685,18 +2695,18 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
                 awaitAll(*txJobs.toTypedArray()).forEach { newTrades.addAll(it) }
 
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    val currentList = if (loadMore) _uiState.value.networkTrades else emptyList()
-                    
-                    // Filter out duplicates (same tx seen from multiple addresses or unconfirmed→confirmed)
-                    // Sort: unconfirmed first, then by timestamp descending
-                    val finalTrades = (currentList + newTrades)
+                    // We re-fetch from offset 0, so we just use the new trades, sort globally,
+                    // and strictly cut off at currentLimit to perfectly paginate across independent streams.
+                    val finalTrades = newTrades
                         .distinctBy { it.id }
                         .sortedWith(compareBy<NetworkTransaction> { it.isConfirmed }.thenByDescending { it.timestamp })
+                        .take(currentLimit)
+
                     if (BuildConfig.DEBUG) Log.d(TAG, "Total raw=${newTrades.size}, unique=${finalTrades.size}, first=${finalTrades.firstOrNull()?.id?.take(8)}")
 
                     _uiState.value = _uiState.value.copy(
                         networkTrades = finalTrades,
-                        historyOffset = currentOffset + limit,
+                        historyOffset = currentLimit,
                         isLoadingHistory = false
                     )
                 }

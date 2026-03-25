@@ -15,7 +15,7 @@ Open-source crypto trading app for the **Ergo blockchain** on Android — swap t
 
 ## Get the App
 
-Download the latest compiled APK from [GitHub Releases](https://github.com/FlyingPig5/piggytrade/releases), or build it yourself for maximum trust.
+Download the latest compiled APK from [GitHub Releases](https://github.com/FlyingPig5/truffle/releases), or build it yourself for maximum trust.
 
 
 ---

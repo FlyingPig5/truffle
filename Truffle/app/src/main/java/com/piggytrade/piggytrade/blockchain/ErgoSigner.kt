@@ -71,7 +71,7 @@ object Base58 {
 class ErgoSigner(private val nodeUrl: String) {
 
     fun calculateAppFee(n: Long, mode: Int = 0): BigInteger {
-        return ProtocolConfig.calculateAppFee(BigInteger.valueOf(n), mode)
+        return ProtocolConfig.calculateAppFee(BigInteger.valueOf(n))
     }
 
     fun calculateAppFeeStablecoin(n: Long): BigInteger {

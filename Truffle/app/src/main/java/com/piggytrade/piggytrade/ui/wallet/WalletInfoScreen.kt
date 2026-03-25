@@ -304,7 +304,10 @@ fun WalletInfoContent(
                     uiState.selectedAddress
                 }
                 
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     val truncatedAddr = if (displayAddr.length > 20) {
                         "${displayAddr.take(8)}...${displayAddr.takeLast(8)}"
                     } else displayAddr
@@ -358,13 +361,13 @@ fun WalletInfoContent(
                     if (onNavigateToQrScanner != null && walletName.isNotEmpty() && walletName != "Select Wallet") {
                         IconButton(
                             onClick = onNavigateToQrScanner,
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier.size(24.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.QrCodeScanner,
                                 contentDescription = "Scan QR",
                                 tint = ColorAccent,
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(22.dp)
                             )
                         }
                     }
@@ -515,7 +518,10 @@ fun WalletInfoContent(
                                 DeFiActivityRow(tx = trade, viewModel = viewModel, onAddressClick = onAddressClick)
                             }
                         } else {
-                            items(displayTrades) { trade ->
+                            items(
+                                items = displayTrades,
+                                key = { it.id }
+                            ) { trade ->
                                 NetworkTradeHistoryItemView(trade, viewModel, onAddressClick = onAddressClick)
                             }
                         }
