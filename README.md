@@ -1,8 +1,15 @@
 <p align="center">
-  <img src="branding/branding_landscape.jpeg" width="700">
+  <img src="branding/branding_landscape.jpg" width="700">
 </p>
 
-Open-source crypto trading app for the **Ergo blockchain** on Android — swap tokens, mint stablecoins, track your portfolio, and follow live on-chain activity, all from your pocket.
+
+## What is Truffle?
+
+Truffle is a fast, self-custodial mobile trading app and wallet for the Ergo blockchain. It's built for traders who want to **act quickly without giving up control** — you stay on-chain, you hold your keys, and every swap lands directly in a DEX pool with no middlemen. It supports traditional wallet transctions and connecting to supported dapps via ErgoPay..
+
+It supports **Spectrum/ErgoDEX** liquidity pools for token swaps, and the **USE**, **SigUSD/SigRSV** and **DexyGold** stablecoin protocols for minting and redeeming. Transactions can be signed securely via **ErgoPay** (recommended), or you can import a mnemonic and sign directly in the app.
+
+---
 
 > [!WARNING]
 > **BETA SOFTWARE**: Truffle is currently in beta. Always verify all transaction details and output amounts before confirming. Use at your own risk!
@@ -20,13 +27,6 @@ Download the latest compiled APK from [GitHub Releases](https://github.com/Flyin
 
 ---
 
-## What is Truffle?
-
-Truffle is a fast, self-custodial mobile trading client for the Ergo blockchain. It's built for traders who want to **act quickly without giving up control** — you stay on-chain, you hold your keys, and every swap lands directly in a DEX pool with no middlemen.
-
-It supports **Spectrum/ErgoDEX** liquidity pools for token swaps, and the **USE**, **SigUSD/SigRSV** and **DexyGold** stablecoin protocols for minting and redeeming. Transactions can be signed securely via **ErgoPay** (recommended), or you can import a mnemonic and sign directly in the app.
-
----
 
 ## Features at a Glance
 
