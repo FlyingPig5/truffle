@@ -1887,7 +1887,7 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        val limit = 200
+        val limit = 500
         val offsetCounter = java.util.concurrent.atomic.AtomicInteger(0)
         val isFinished = java.util.concurrent.atomic.AtomicBoolean(false)
         val allBoxes = java.util.concurrent.ConcurrentLinkedQueue<Map<String, Any>>()
