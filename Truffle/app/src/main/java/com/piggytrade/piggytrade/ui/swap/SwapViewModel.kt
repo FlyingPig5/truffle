@@ -1887,37 +1887,58 @@ class SwapViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        val addressBalances = mutableMapOf<String, Long>()
-        var offset = 0
-        val limit = 500
-        var totalFetched = 0
+        val limit = 200
+        val offsetCounter = java.util.concurrent.atomic.AtomicInteger(0)
+        val isFinished = java.util.concurrent.atomic.AtomicBoolean(false)
+        val allBoxes = java.util.concurrent.ConcurrentLinkedQueue<Map<String, Any>>()
+        val totalFetchedCounter = java.util.concurrent.atomic.AtomicInteger(0)
 
-        while (true) {
-            val boxes = readNode { it.api.getUnspentBoxesByTokenId(
-                tokenId = tokenId,
-                offset = offset,
-                limit = limit,
-                sortDirection = "desc",
-                includeUnconfirmed = false
-            ) }
+        coroutineScope {
+            val workers = List(4) {
+                async(Dispatchers.IO) {
+                    while (!isFinished.get()) {
+                        val currentOffset = offsetCounter.getAndAdd(limit)
+                        try {
+                            val boxes = readNode { it.api.getUnspentBoxesByTokenId(
+                                tokenId = tokenId,
+                                offset = currentOffset,
+                                limit = limit,
+                                sortDirection = "desc",
+                                includeUnconfirmed = false
+                            ) }
 
-            for (box in boxes) {
-                val address = box["address"] as? String ?: continue
-                @Suppress("UNCHECKED_CAST")
-                val assets = box["assets"] as? List<Map<String, Any>> ?: continue
-                for (asset in assets) {
-                    if ((asset["tokenId"] as? String) == tokenId) {
-                        val amount = (asset["amount"] as? Number)?.toLong() ?: 0L
-                        addressBalances[address] = (addressBalances[address] ?: 0L) + amount
+                            if (boxes.isNotEmpty()) {
+                                allBoxes.addAll(boxes)
+                                val currentTotal = totalFetchedCounter.addAndGet(boxes.size)
+                                onProgress(currentTotal)
+                            }
+
+                            if (boxes.size < limit || boxes.isEmpty()) {
+                                isFinished.set(true)
+                            }
+                        } catch (e: Exception) {
+                            if (BuildConfig.DEBUG) Log.d(TAG, "Worker failed at offset $currentOffset: ${e.message}")
+                            isFinished.set(true)
+                        }
                     }
                 }
             }
+            workers.awaitAll()
+        }
 
-            totalFetched += boxes.size
-            onProgress(totalFetched)
+        val addressBalances = mutableMapOf<String, Long>()
+        val uniqueBoxes = allBoxes.distinctBy { it["boxId"] as? String ?: it.hashCode().toString() }
 
-            if (boxes.size < limit) break
-            offset += limit
+        for (box in uniqueBoxes) {
+            val address = box["address"] as? String ?: continue
+            @Suppress("UNCHECKED_CAST")
+            val assets = box["assets"] as? List<Map<String, Any>> ?: continue
+            for (asset in assets) {
+                if ((asset["tokenId"] as? String) == tokenId) {
+                    val amount = (asset["amount"] as? Number)?.toLong() ?: 0L
+                    addressBalances[address] = (addressBalances[address] ?: 0L) + amount
+                }
+            }
         }
 
         val sortedList = addressBalances.entries
